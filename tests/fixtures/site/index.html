@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+<head>
+  <meta name="generator" content="PHP 7.4 demo">
+  <script src="/app.js"></script>
+  <script>
+    fetch('/api/user?id=5');
+  </script>
+</head>
+<body>
+  <!-- leftover path: /backup/admin.bak -->
+  <h1>Lab index</h1>
+  <a href="/view.html?page=home">home</a>
+  <a href="/search.html">search</a>
+  <a href="https://cdnjs.cloudflare.com/ajax/libs/jquery/3.6.0/jquery.min.js">jquery cdn</a>
+  <form action="/upload.html" method="post" enctype="multipart/form-data">
+    <input type="file" name="avatar">
+    <input type="hidden" name="id" value="12">
+    <input type="submit" value="Upload">
+  </form>
+</body>
+</html>

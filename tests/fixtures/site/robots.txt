@@ -1,0 +1,5 @@
+User-agent: *
+Disallow: /admin
+Disallow: /backup
+Allow: /
+Sitemap: http://REPLACE_ORIGIN/sitemap.xml
