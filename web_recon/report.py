@@ -10,6 +10,7 @@ from pathlib import Path
 
 from web_recon.classify import _priority
 from web_recon.models import Fingerprint, Header, ReconResult, Surface
+from web_recon.term import info
 
 SECURITY_HEADERS = [
     "Content-Security-Policy",
@@ -396,31 +397,56 @@ def render_inventory(result: ReconResult) -> str:
 
 
 def print_overview(result: ReconResult) -> None:
-    print()
-    print(f"=== Web Recon Overview: {result.target} ===")
-    print(f"Pages crawled: {len(result.pages)}")
     n_ok = sum(1 for p in result.pages if not p.error)
     n_err = sum(1 for p in result.pages if p.error)
-    print(f"  ok={n_ok}  errors={n_err}")
-    print(f"Input surfaces: {len(result.surfaces)}")
-    print("Candidate classes:")
+    err_bit = ("{bred}" + str(n_err) + "{rst}") if n_err else "0"
+
+    print()
+    info("{bright}=== Web Recon Overview: {byellow}" + result.target + "{rst}{bright} ==={rst}")
+    info(
+        "Pages crawled: {byellow}"
+        + str(len(result.pages))
+        + "{rst}  ok={bgreen}"
+        + str(n_ok)
+        + "{rst}  errors="
+        + err_bit
+    )
+    info("Input surfaces: {byellow}" + str(len(result.surfaces)) + "{rst}")
+    info("{bright}Candidate classes:{rst}")
     if result.class_counts:
         for cls, n in result.class_counts.items():
-            print(f"  {cls}: {n}")
+            info("  {bmagenta}" + cls + "{rst}: {byellow}" + str(n) + "{rst}")
     else:
-        print("  (none)")
-    print("Top candidate inputs:")
+        info("  (none)")
+    info("{bright}Top candidate inputs:{rst}")
     ranked = [s for s in result.surfaces if s.classes]
     ranked.sort(key=lambda s: (_priority(s.classes[0]) if s.classes else 99, s.page_path, s.param))
     for i, s in enumerate(ranked[:8], 1):
         path = s.page_path or "/"
         display = "/" + path if path and not path.startswith("/") else (path or "/")
-        print(f"  {i}. {s.method} {display}  param={s.param}  [{', '.join(s.classes)}]")
+        info(
+            "  "
+            + str(i)
+            + ". {bblue}"
+            + s.method
+            + "{rst} "
+            + display
+            + "  param={bgreen}"
+            + s.param
+            + "{rst}  [{bmagenta}"
+            + ", ".join(s.classes)
+            + "{rst}]"
+        )
     if not ranked:
-        print("  (none)")
+        info("  (none)")
     classified = Path(result.output_dir) / "classified.md"
     manual = Path(result.output_dir) / "manual_checks.md"
-    print()
-    print(f"Full classified report saved to {classified}. For additional manual checks and bypass variants, see {manual.name}.")
-    print(f"Reports: {result.output_dir}/")
+    info(
+        "Full classified report saved to {bgreen}"
+        + str(classified)
+        + "{rst}. For additional manual checks and bypass variants, see {bgreen}"
+        + manual.name
+        + "{rst}."
+    )
+    info("{bright}Don't forget to check classified.md and manual_checks.md for commands to run manually.{rst}")
     print()

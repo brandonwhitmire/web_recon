@@ -13,6 +13,7 @@ import sys
 from web_recon import __version__
 from web_recon.models import Config
 from web_recon.pipeline import run
+from web_recon.term import error, warn
 
 
 EPILOG = """
@@ -76,13 +77,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         asyncio.run(run(cfg))
     except KeyboardInterrupt:
-        print("\nInterrupted.", file=sys.stderr)
+        print()
+        warn("Interrupted.")
         return 130
     except Exception as exc:
         msg = str(exc)
-        print(f"error: {msg}", file=sys.stderr)
-        if "Executable doesn't exist" in msg or "playwright" in msg.lower() and "chromium" in msg.lower():
-            print("hint: playwright install chromium", file=sys.stderr)
+        error(msg)
+        if "Executable doesn't exist" in msg or ("playwright" in msg.lower() and "chromium" in msg.lower()):
+            error("hint: playwright install chromium")
         return 1
     return 0
 

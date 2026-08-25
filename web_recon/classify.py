@@ -81,6 +81,7 @@ def mapping_for(
         "TARGET": target,
         "PAGE": page,
         "PARAM": param if param not in {"", "*"} else "<PARAM>",
+        "PARAMETER": param if param not in {"", "*"} else "<PARAMETER>",
     }
     if attacker_ip:
         m["ATTACKER_IP"] = attacker_ip

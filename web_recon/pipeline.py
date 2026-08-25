@@ -10,11 +10,22 @@ from web_recon.crawler import PassiveCrawler, php_files_from_pages
 from web_recon.models import Config, Fingerprint, ReconResult
 from web_recon.report import print_overview, write_all
 from web_recon.scope import origin_of, target_slug
+from web_recon.term import info, warn
 from web_recon.util import detect_attacker_ip, ensure_dir
 
 
 def _progress(i: int, total: int, url: str) -> None:
-    print(f"    [{i}/{total}] {url}")
+    host = urlparse(url).hostname or ""
+    info(
+        "{bright}[{yellow}"
+        + host
+        + "{crst}/{bgreen}crawl{crst}]{rst} ["
+        + str(i)
+        + "/"
+        + str(total)
+        + "] "
+        + url
+    )
 
 
 async def run(config: Config) -> ReconResult:
@@ -35,23 +46,33 @@ async def run(config: Config) -> ReconResult:
     attacker_ip = config.attacker_ip or detect_attacker_ip()
     scope_host = (parsed.hostname or "").lower()
 
-    print(f"[*] Target: {start}")
-    print(f"[*] Scope host: {scope_host} (subdomains off, GET navigation only)")
-    print(f"[*] Output: {out_dir}")
+    info("Target: {byellow}" + start + "{rst}")
+    info("Scope host: {byellow}" + scope_host + "{rst} (subdomains off, GET navigation only)")
+    info("Output: {bgreen}" + str(out_dir) + "{rst}")
     if attacker_ip:
-        print(f"[*] Attacker IP (for pastable fill): {attacker_ip}")
+        info("Attacker IP (for pastable fill): {byellow}" + attacker_ip + "{rst}")
     else:
-        print("[*] Attacker IP unknown — leaving <ATTACKER_IP> placeholder")
+        warn("Attacker IP unknown — leaving <ATTACKER_IP> placeholder")
 
     crawler = PassiveCrawler(config, scope_host=scope_host, origin=origin, dom_dir=dom_dir)
 
-    print("[*] Phase 1–2: robots.txt, sitemap.xml, rendered-DOM crawl")
+    info(
+        "{bblue}Phase 1–2 {green}(robots.txt, sitemap.xml, rendered-DOM crawl){rst} running against {byellow}"
+        + start
+        + "{rst}"
+    )
     pages = await crawler.crawl([start], progress=_progress)
     origin = crawler.origin or origin
-    print(f"[*] Scope hosts: {', '.join(sorted(crawler.scope_hosts)) or scope_host}")
+    info("Scope hosts: {byellow}" + (", ".join(sorted(crawler.scope_hosts)) or scope_host) + "{rst}")
 
     php_files = php_files_from_pages(pages)
-    print(f"[*] Phase 3: classify {sum(1 for _ in pages)} page(s) → input surfaces")
+    info(
+        "{bblue}Phase 3 {green}(classify){rst} {byellow}"
+        + str(len(pages))
+        + "{rst} page(s) on {byellow}"
+        + scope_host
+        + "{rst}"
+    )
     surfaces = classify_all(
         pages,
         origin=origin,
