@@ -457,6 +457,7 @@ def render_inventory(result: ReconResult) -> str:
         "output_dir": result.output_dir,
         "attacker_ip": result.attacker_ip,
         "class_counts": result.class_counts,
+        "config": result.config,
         "fingerprint": asdict(result.fingerprint),
         "robots": asdict(result.robots) if result.robots else None,
         "sitemap": asdict(result.sitemap) if result.sitemap else None,
@@ -469,13 +470,28 @@ def render_inventory(result: ReconResult) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
-def print_overview(result: ReconResult) -> None:
+def print_overview(result: ReconResult, class_filters: list[str] | None = None, from_cache: bool = False) -> None:
+    filters = set(class_filters or [])
+    surfaces = result.surfaces
+    if filters:
+        surfaces = [s for s in surfaces if any(c in filters for c in s.classes)]
+    counts = {}
+    for s in surfaces:
+        for c in s.classes:
+            if filters and c not in filters:
+                continue
+            counts[c] = counts.get(c, 0) + 1
+
     n_ok = sum(1 for p in result.pages if not p.error)
     n_err = sum(1 for p in result.pages if p.error)
     err_bit = ("{bred}" + str(n_err) + "{rst}") if n_err else "0"
 
     print()
     info("{bright}=== Web Recon Overview: {byellow}" + result.target + "{rst}{bright} ==={rst}")
+    if from_cache:
+        info("{byellow}Cache hit{rst} — reusing results (same crawl options). {bgreen}--force-rescan{rst} to crawl again.")
+    if filters:
+        info("Filter: {bmagenta}" + ", ".join(class_filters or []) + "{rst}")
     info(
         "Pages crawled: {byellow}"
         + str(len(result.pages))
@@ -484,17 +500,17 @@ def print_overview(result: ReconResult) -> None:
         + "{rst}  errors="
         + err_bit
     )
-    info("Input surfaces: {byellow}" + str(len(result.surfaces)) + "{rst}")
+    info("Input surfaces: {byellow}" + str(len(surfaces) if filters else len(result.surfaces)) + "{rst}")
     info("{bright}Candidate classes:{rst}")
-    if result.class_counts:
-        for cls, n in result.class_counts.items():
+    if counts:
+        for cls, n in sorted(counts.items(), key=lambda kv: (_priority(kv[0]), kv[0])):
             info("  {bmagenta}" + cls + "{rst}: {byellow}" + str(n) + "{rst}")
     else:
         info("  (none)")
-    sqli_s = [s for s in result.surfaces if "sqli" in s.classes]
-    n_high = sum(1 for s in sqli_s if s.sqli_priority == "HIGH")
-    n_med = sum(1 for s in sqli_s if s.sqli_priority == "MEDIUM")
-    if sqli_s:
+    sqli_s = [s for s in surfaces if "sqli" in s.classes]
+    if (not filters or "sqli" in filters) and sqli_s:
+        n_high = sum(1 for s in sqli_s if s.sqli_priority == "HIGH")
+        n_med = sum(1 for s in sqli_s if s.sqli_priority == "MEDIUM")
         info(
             "SQLi candidate sinks: {byellow}"
             + str(n_high)
@@ -503,10 +519,18 @@ def print_overview(result: ReconResult) -> None:
             + "{rst} MEDIUM (pastables only, not sent)"
         )
     info("{bright}Top candidate inputs:{rst}")
-    ranked = [s for s in result.surfaces if s.classes]
-    ranked.sort(key=lambda s: (_priority(s.classes[0]) if s.classes else 99, s.page_path, s.param))
-    for i, s in enumerate(ranked[:8], 1):
+    ranked = [s for s in surfaces if s.classes]
+    ranked.sort(
+        key=lambda s: (
+            _priority(next(c for c in s.classes if not filters or c in filters)),
+            s.page_path,
+            s.param,
+        )
+    )
+    shown = 8
+    for i, s in enumerate(ranked[:shown], 1):
         display = _display_path(s)
+        labels = [c for c in s.classes if not filters or c in filters]
         info(
             "  "
             + str(i)
@@ -517,7 +541,7 @@ def print_overview(result: ReconResult) -> None:
             + "  param={bgreen}"
             + s.param
             + "{rst}  [{bmagenta}"
-            + ", ".join(s.classes)
+            + ", ".join(labels)
             + "{rst}]"
         )
     if not ranked:
@@ -532,4 +556,46 @@ def print_overview(result: ReconResult) -> None:
         + "{rst}."
     )
     info("{bright}Don't forget to check classified.md and manual_checks.md for commands to run manually.{rst}")
+    print()
+
+
+def print_class_pastables(result: ReconResult, class_filters: list[str], verbose: bool = False) -> None:
+    """Dump matching pastables to the terminal (copy-pasteable, no [*] on payload lines)."""
+    filters = set(class_filters)
+    hits = [s for s in result.surfaces if any(c in filters for c in s.classes)]
+    if not hits:
+        info("No surfaces matched filter {bmagenta}" + ", ".join(class_filters) + "{rst}.")
+        return
+    info("{bright}=== Filtered pastables ({bmagenta}" + ", ".join(class_filters) + "{rst}{bright}) ==={rst}")
+    print()
+    for s in hits:
+        display = _display_path(s)
+        matching = [c for c in s.classes if c in filters]
+        for cls in matching:
+            extra = ""
+            if cls == "sqli" and s.sqli_priority:
+                extra = " [" + s.sqli_priority + "]"
+            info(
+                "{bblue}"
+                + s.method
+                + "{rst} "
+                + display
+                + "  param={bgreen}"
+                + s.param
+                + "{rst}  {bmagenta}"
+                + cls
+                + extra
+                + "{rst}"
+            )
+            if s.why.get(cls):
+                info("  " + s.why[cls])
+            cmds = list(s.canonical.get(cls) or [])
+            if verbose:
+                cmds.extend(s.verbose.get(cls) or [])
+            if cmds:
+                print()
+                print("\n".join(cmds))
+                print()
+            else:
+                info("  (no pastable template)")
     print()

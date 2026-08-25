@@ -26,6 +26,20 @@ python -m web_recon --help
 
 `--verbose` adds bypass ladders to `classified.md` (they always land in `manual_checks.md`).
 
+### Cache and filters
+
+A crawl is reused when the target and crawl options match (flag order does not matter). Classifier flags only filter what gets printed.
+
+```bash
+python -m web_recon http://10.10.11.12
+python -m web_recon http://10.10.11.12 --sqli
+python -m web_recon http://10.10.11.12 --xss --ssti
+python -m web_recon http://10.10.11.12 --lfi
+python -m web_recon http://10.10.11.12 --force-rescan
+```
+
+Filters: `--sqli` `--xss` `--ssti` `--ssrf` `--xxe` `--lfi` / `--file-inclusion` `--cmdi` / `--command-injection` `--file-upload` `--idor` `--verb-tampering`.
+
 ## Output
 
 ```

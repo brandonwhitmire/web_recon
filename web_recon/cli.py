@@ -11,6 +11,7 @@ import asyncio
 import sys
 
 from web_recon import __version__
+from web_recon.filters import FILTER_FLAGS, classes_from_args
 from web_recon.models import Config
 from web_recon.pipeline import run
 from web_recon.term import error, warn
@@ -26,8 +27,17 @@ It NEVER:
 
 It PRINTS operator pastables. You copy and run them yourself.
 
+Cache:
+  Crawl results are reused when the target and crawl options match (flag order
+  does not matter). Classifier filters are output-only and do not recrawl.
+  Use --force-rescan to ignore the cache.
+
 Examples:
   python -m web_recon http://10.10.11.12
+  python -m web_recon http://10.10.11.12 --sqli
+  python -m web_recon http://10.10.11.12 --xss --ssti
+  python -m web_recon http://10.10.11.12 --lfi --verbose
+  python -m web_recon http://10.10.11.12 --force-rescan
   python -m web_recon http://target.web --verbose --attacker-ip 10.10.14.8
   python -m web_recon https://app.lab -o ./results --max-pages 40
 """
@@ -42,7 +52,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("url", help="Target URL (http://host[:port][/path])")
     p.add_argument("-o", "--output", default="results", help="Results root directory (default: results)")
-    p.add_argument("-v", "--verbose", action="store_true", help="Include bypass ladders in classified.md (always written to manual_checks.md)")
+    p.add_argument("-v", "--verbose", action="store_true", help="Include bypass ladders in classified.md and filtered terminal output (always written to manual_checks.md)")
     p.add_argument("--max-pages", type=int, default=80, help="Crawl cap (default: 80)")
     p.add_argument("--max-depth", type=int, default=5, help="Max link depth (default: 5)")
     p.add_argument("--timeout", type=int, default=20000, help="Playwright timeout in ms (default: 20000)")
@@ -53,7 +63,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tls-verify", action="store_true", help="Verify TLS certificates (default: off, lab-friendly)")
     p.add_argument("--no-sitemap-crawl", action="store_true", help="List sitemap entries but do not enqueue them")
     p.add_argument("--headed", action="store_true", help="Run Chromium headed (debug)")
+    p.add_argument("--force-rescan", action="store_true", help="Ignore cached crawl results and recrawl")
     p.add_argument("--version", action="version", version=f"web-recon {__version__}")
+
+    filt = p.add_argument_group(
+        "classifier filters",
+        "Output only these classes. Repeatable. Does not recrawl when cache matches.",
+    )
+    seen_help: dict[str, str] = {
+        "sqli": "SQL injection candidate sinks (login / search / id-style)",
+        "xss": "XSS candidates",
+        "ssti": "SSTI candidates",
+        "ssrf": "SSRF candidates",
+        "xxe": "XXE candidates",
+        "lfi": "File inclusion / LFI (same as --file-inclusion)",
+        "file-inclusion": "File inclusion / LFI",
+        "cmdi": "Command injection (same as --command-injection)",
+        "command-injection": "Command injection",
+        "file-upload": "File upload candidates",
+        "idor": "IDOR candidates",
+        "verb-tampering": "HTTP verb tampering",
+    }
+    for cli, _key in FILTER_FLAGS:
+        filt.add_argument(
+            f"--{cli}",
+            action="store_true",
+            help=seen_help.get(cli, f"Only show {cli} candidates"),
+        )
     return p
 
 
@@ -73,6 +109,8 @@ def main(argv: list[str] | None = None) -> int:
         tls_verify=args.tls_verify,
         enqueue_sitemap=not args.no_sitemap_crawl,
         headless=not args.headed,
+        force_rescan=args.force_rescan,
+        class_filters=classes_from_args(args),
     )
     try:
         asyncio.run(run(cfg))

@@ -19,6 +19,8 @@ class Config:
     tls_verify: bool = False
     enqueue_sitemap: bool = True
     headless: bool = True
+    force_rescan: bool = False
+    class_filters: list[str] = field(default_factory=list)
 
 
 @dataclass
