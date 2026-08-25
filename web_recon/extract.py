@@ -9,8 +9,26 @@ from bs4 import BeautifulSoup, Comment
 
 from web_recon.models import FormField, FormRecord
 from web_recon.scope import in_scope, is_cdn_or_third_party, normalize_url
+from web_recon_heuristics import SQLI_SKIP_NAMES, SQLI_USERNAME_NAMES
 
-SEARCH_NAMES = {"q", "s", "search", "query", "keyword", "keywords", "term", "find"}
+SEARCH_NAMES = {"q", "s", "search", "query", "keyword", "keywords", "term", "find", "lookup"}
+SEARCH_HINT_SUBSTRING = ("search", "query", "find", "lookup", "keyword")
+
+REGISTER_HINTS = (
+    "register", "signup", "sign_up", "sign-up", "createaccount", "create_account",
+    "createuser",
+)
+RESET_HINTS = (
+    "reset", "forgot", "recover", "lostpassword", "lost_password", "forgotpassword",
+    "lost-password", "changepassword", "change_password",
+)
+NEWSLETTER_HINTS = ("newsletter", "subscribe", "mailing", "mailchimp")
+COMMENT_HINTS = ("comment", "comments", "reply", "discussion", "guestbook")
+CONTACT_HINTS = ("contact", "enquiry", "inquiry", "feedback", "support")
+CONFIRM_PASSWORD_NAMES = {
+    "password2", "pass2", "password_confirm", "confirmpassword",
+    "confirm_password", "repeat_password", "passconf",
+}
 XML_NAME_HINTS = ("xml", "soap", "rss", "atom", "svg")
 XML_ACCEPT_HINTS = ("xml", "svg", "docx", "xlsx", "odt", "application/xml", "text/xml", "image/svg")
 
@@ -106,6 +124,107 @@ def _is_search_name(name: str) -> bool:
     return "search" in n
 
 
+def _is_search_placeholder(text: str) -> bool:
+    t = (text or "").lower()
+    if not t:
+        return False
+    return any(n in t for n in SEARCH_HINT_SUBSTRING)
+
+
+def _norm_ident(value: str) -> str:
+    return (value or "").strip().lower().replace("-", "_")
+
+
+def _hay_has(hay: str, hints: tuple[str, ...] | set[str]) -> bool:
+    return any(h.replace("-", "_") in hay for h in hints)
+
+
+def _form_haystack(form_el, action: str, fields: list[FormField]) -> str:
+    parts = [
+        action or "",
+        str(form_el.get("id") or ""),
+        " ".join(form_el.get("class") or []),
+        str(form_el.get("name") or ""),
+        str(form_el.get("action") or ""),
+    ]
+    for el in form_el.find_all(["button", "input", "legend"]):
+        if el.name == "input":
+            t = (el.get("type") or "text").lower()
+            if t not in {"submit", "button", "image"}:
+                continue
+        parts.append(str(el.get("value") or ""))
+        parts.append(el.get_text(" ", strip=True) or "")
+        parts.append(str(el.get("id") or ""))
+        parts.append(" ".join(el.get("class") or []))
+    for f in fields:
+        parts.append(f.name or "")
+        parts.append(f.field_type or "")
+    return " ".join(parts).lower().replace("-", "_")
+
+
+def _identity_fields(fields: list[FormField]) -> list[FormField]:
+    skip_types = {"submit", "button", "reset", "hidden", "checkbox", "radio", "file", "image", "password"}
+    named: list[FormField] = []
+    other: list[FormField] = []
+    for f in fields:
+        ft = (f.field_type or "").lower()
+        n = _norm_ident(f.name)
+        if ft in skip_types:
+            continue
+        if n in SQLI_SKIP_NAMES:
+            continue
+        if n in SQLI_USERNAME_NAMES or ft == "email":
+            named.append(f)
+        else:
+            other.append(f)
+    if named:
+        return named
+    return other[:1]
+
+
+def annotate_form_sqli_flags(form_el, action: str, fields: list[FormField]) -> None:
+    """Stamp form-level SQLi context onto each field. Classification stays in heuristics."""
+    hay = _form_haystack(form_el, action, fields)
+    action_path = (urlparse(action or "").path or "").lower().replace("-", "_")
+    has_password = any((f.field_type or "").lower() == "password" for f in fields)
+    pw_count = sum(1 for f in fields if (f.field_type or "").lower() == "password")
+    confirm_pw = any(_norm_ident(f.name) in CONFIRM_PASSWORD_NAMES for f in fields)
+    is_register = pw_count >= 2 or confirm_pw or _hay_has(hay, REGISTER_HINTS)
+    is_reset = _hay_has(hay, RESET_HINTS)
+    is_newsletter = _hay_has(hay, NEWSLETTER_HINTS)
+    is_contact = _hay_has(hay, CONTACT_HINTS)
+    is_comment = _hay_has(hay, COMMENT_HINTS) and not is_contact
+    is_search_action = any(h in action_path for h in ("search", "find", "lookup")) or any(
+        "is_search_field" in (f.flags or []) for f in fields
+    )
+
+    form_flags: set[str] = set()
+    if is_register:
+        form_flags.add("is_login_adjacent_form")
+    elif has_password:
+        form_flags.add("is_login_form")
+    elif is_reset:
+        form_flags.add("is_login_adjacent_form")
+    elif is_newsletter:
+        form_flags.add("is_newsletter_form")
+    elif is_comment:
+        form_flags.add("is_comment_form")
+    elif is_search_action:
+        form_flags.add("is_search_form")
+
+    identity: set[int] = set()
+    if "is_login_form" in form_flags or "is_login_adjacent_form" in form_flags:
+        identity = {id(f) for f in _identity_fields(fields)}
+
+    for f in fields:
+        extra = set(form_flags)
+        if (f.field_type or "").lower() == "password":
+            extra.add("is_password_field")
+        if id(f) in identity:
+            extra.add("is_username_field")
+        f.flags = sorted(set(f.flags) | extra)
+
+
 def flags_for_field(
     *,
     name: str,
@@ -114,6 +233,8 @@ def flags_for_field(
     tag_name: str = "input",
     form_enctype: str = "",
     sample_value: str = "",
+    html_id: str = "",
+    placeholder: str = "",
 ) -> list[str]:
     flags: set[str] = set()
     n = (name or "").lower()
@@ -121,6 +242,10 @@ def flags_for_field(
     accept_l = (accept or "").lower()
     enctype_l = (form_enctype or "").lower()
     tag = (tag_name or "input").lower()
+    hid = (html_id or "").lower()
+
+    if itype == "password":
+        flags.add("is_password_field")
 
     if itype == "file":
         flags.add("is_file_input")
@@ -134,7 +259,12 @@ def flags_for_field(
         if itype not in NON_FREE_TYPES:
             flags.add("is_free_text")
 
-    if itype == "search" or _is_search_name(n):
+    if (
+        itype == "search"
+        or _is_search_name(n)
+        or _is_search_name(hid)
+        or _is_search_placeholder(placeholder)
+    ):
         flags.add("is_search_field")
         flags.add("is_free_text")
 
@@ -185,6 +315,8 @@ def extract_forms(soup: BeautifulSoup, page_url: str) -> list[FormRecord]:
                 itype = (el.get("type") or "text").strip().lower()
                 value = el.get("value") or ""
             accept = el.get("accept") or ""
+            html_id = (el.get("id") or "").strip()
+            placeholder = el.get("placeholder") or ""
             if itype == "file":
                 has_file = True
             flags = flags_for_field(
@@ -194,6 +326,8 @@ def extract_forms(soup: BeautifulSoup, page_url: str) -> list[FormRecord]:
                 tag_name=el.name,
                 form_enctype=enctype,
                 sample_value=str(value),
+                html_id=html_id,
+                placeholder=placeholder,
             )
             if not name and itype in {"submit", "button", "reset"}:
                 continue
@@ -206,6 +340,7 @@ def extract_forms(soup: BeautifulSoup, page_url: str) -> list[FormRecord]:
                     flags=flags,
                 )
             )
+        annotate_form_sqli_flags(form, action, fields)
         forms.append(
             FormRecord(
                 action=action,
@@ -243,6 +378,8 @@ def extract_loose_fields(soup: BeautifulSoup) -> list[FormField]:
             accept=accept,
             tag_name=el.name,
             sample_value=str(value),
+            html_id=(el.get("id") or "").strip(),
+            placeholder=el.get("placeholder") or "",
         )
         if el.get("contenteditable") and str(el.get("contenteditable")).lower() in {"true", ""}:
             flags = sorted(set(flags) | {"is_free_text"})

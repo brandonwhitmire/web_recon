@@ -13,7 +13,9 @@ from web_recon_heuristics import (
     PARAM_NAME_TRIGGERS,
     PASTABLES,
     classify_input,
+    classify_sqli_surface,
     pastables_for,
+    sqli_pastables,
 )
 
 from web_recon.extract import flags_for_query_param
@@ -27,6 +29,7 @@ REFLECTION_NOTE = (
 )
 
 CLASS_PRIORITY = [
+    "sqli",
     "file_inclusion",
     "command_injection",
     "file_upload",
@@ -67,6 +70,7 @@ def mapping_for(
     param: str,
     attacker_ip: str | None,
     php_file: str | None,
+    method: str | None = None,
 ) -> dict[str, str]:
     parsed = urlparse(origin)
     host = parsed.hostname or ""
@@ -87,6 +91,8 @@ def mapping_for(
         m["ATTACKER_IP"] = attacker_ip
     if php_file:
         m["FILE"] = php_file
+    if method:
+        m["METHOD"] = method
     return m
 
 
@@ -123,7 +129,19 @@ def emit_surface(
     php_file: str | None,
 ) -> Surface:
     flags = set(surface.context_flags)
-    classes = classify_input(surface.param if surface.param != "*" else None, flags)
+    param_name = surface.param if surface.param != "*" else None
+    classes = classify_input(param_name, flags)
+    sqli = classify_sqli_surface(
+        param_name=param_name,
+        context_flags=flags,
+        field_type=surface.field_type,
+        method=surface.method,
+        kind=surface.kind,
+    )
+    if sqli:
+        classes.append("sqli")
+        surface.sqli_priority = sqli["priority"]
+        surface.sqli_role = sqli["role"]
     # Site-wide OPTIONS / verb tampering
     if surface.kind == "site" and "any_endpoint" in flags:
         if "verb_tampering" not in classes:
@@ -134,14 +152,26 @@ def emit_surface(
         param=surface.param,
         attacker_ip=attacker_ip,
         php_file=php_file,
+        method=surface.method,
     )
+    # dedupe, preserve order
+    seen: set[str] = set()
+    classes = [c for c in classes if not (c in seen or seen.add(c))]
+    classes.sort(key=_priority)
     surface.classes = classes
     for cls in classes:
-        packed = pastables_for(cls, verbose=False)
-        packed_v = pastables_for(cls, verbose=True)
+        if cls == "sqli" and sqli:
+            packed = sqli_pastables(sqli["role"], verbose=False, param=surface.param)
+            packed_v = sqli_pastables(sqli["role"], verbose=True, param=surface.param)
+            surface.why[cls] = sqli["why"]
+        else:
+            packed = pastables_for(cls, verbose=False)
+            packed_v = pastables_for(cls, verbose=True)
+            if not packed:
+                continue
+            surface.why[cls] = why_for(cls, surface.param, flags)
         if not packed:
             continue
-        surface.why[cls] = why_for(cls, surface.param, flags)
         note = packed.get("note") or ""
         if cls in REFLECTION_CLASSES:
             note = (REFLECTION_NOTE + " " + note).strip()

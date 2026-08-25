@@ -124,6 +124,8 @@ class Surface:
     canonical: dict[str, list[str]] = field(default_factory=dict)
     verbose: dict[str, list[str]] = field(default_factory=dict)
     reflection_classes: list[str] = field(default_factory=list)
+    sqli_priority: str = ""  # HIGH | MEDIUM | ""
+    sqli_role: str = ""  # login | search | id | filter | login_adjacent | newsletter | comment
 
 
 @dataclass

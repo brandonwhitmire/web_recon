@@ -26,6 +26,28 @@ SECURITY_HEADERS = [
 ]
 
 
+def _display_path(s: Surface) -> str:
+    path = s.page_path or "/"
+    if path == "":
+        return "/"
+    if not str(path).startswith("/"):
+        return "/" + path
+    return path
+
+
+def _sqli_sort_key(s: Surface) -> tuple:
+    role_rank = {
+        "login": 0,
+        "search": 1,
+        "id": 2,
+        "filter": 3,
+        "login_adjacent": 4,
+        "newsletter": 5,
+        "comment": 6,
+    }
+    return (role_rank.get(s.sqli_role, 9), s.page_path, s.param.lower())
+
+
 def fence(text: str) -> str:
     body = text if isinstance(text, str) else str(text)
     ticks = "```"
@@ -271,6 +293,30 @@ def render_classified(result: ReconResult, include_verbose: bool) -> str:
     else:
         lines.append("- _(no candidate classes)_")
     lines.append("")
+    lines.append("## SQLi Candidate Surfaces")
+    lines.append("")
+    lines.append(
+        "Auth and DB-lookup inputs only (login, search, id-style GET). "
+        "Not cookies, headers, uploads, or unrelated free-text. "
+        "**Candidate sinks** — this tool did not send payloads or submit forms."
+    )
+    lines.append("")
+    sqli_surfs = [s for s in result.surfaces if "sqli" in s.classes]
+    high = sorted([s for s in sqli_surfs if s.sqli_priority == "HIGH"], key=_sqli_sort_key)
+    medium = sorted([s for s in sqli_surfs if s.sqli_priority == "MEDIUM"], key=_sqli_sort_key)
+    if not sqli_surfs:
+        lines.append("_No HIGH/MEDIUM SQLi candidate sinks._")
+        lines.append("")
+    else:
+        for label, group in (("HIGH", high), ("MEDIUM", medium)):
+            lines.append(f"### {label}")
+            lines.append("")
+            if not group:
+                lines.append("_None._")
+                lines.append("")
+                continue
+            for s in group:
+                _sqli_sink_md(lines, s, include_verbose=include_verbose)
     lines.append("## Surfaces")
     lines.append("")
     classified = [s for s in result.surfaces if s.classes]
@@ -288,13 +334,35 @@ def render_classified(result: ReconResult, include_verbose: bool) -> str:
     return "\n".join(lines)
 
 
+def _sqli_sink_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
+    display = _display_path(s)
+    lines.append(f"#### {s.method} {display}  `{s.param}`")
+    lines.append("")
+    if s.kind == "form_field":
+        lines.append(f"- Location: `{s.method}` form action=`{s.page_url}` field=`{s.param}`")
+    else:
+        lines.append(f"- Location: `{s.method}` `{s.page_url}` param=`{s.param}`")
+    lines.append(f"- Priority: **{s.sqli_priority or 'n/a'}**")
+    if s.sqli_role:
+        lines.append(f"- Role: `{s.sqli_role}`")
+    if s.why.get("sqli"):
+        lines.append(f"- Why: {s.why['sqli']}")
+    if s.notes.get("sqli"):
+        lines.append(f"- Note: {s.notes['sqli']}")
+    lines.append("")
+    cmds = list(s.canonical.get("sqli") or [])
+    if include_verbose:
+        cmds.extend(s.verbose.get("sqli") or [])
+    if cmds:
+        lines.append(fence("\n".join(cmds)))
+        lines.append("")
+    else:
+        lines.append("_No SQLi pastables for this sink._")
+        lines.append("")
+
+
 def _surface_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
-    path = s.page_path or "/"
-    display = path if path.startswith("/") else ("/" + path if path != "/" else "/")
-    if path == "":
-        display = "/"
-    elif not path.startswith("/"):
-        display = "/" + path
+    display = _display_path(s)
     lines.append(f"### {s.method} {display}  `{s.param}`")
     lines.append("")
     lines.append(f"- Kind: `{s.kind}`")
@@ -318,6 +386,14 @@ def _surface_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
     for cls in s.classes:
         lines.append(f"#### {cls}")
         lines.append("")
+        if cls == "sqli":
+            if s.sqli_priority:
+                lines.append(f"- Priority: **{s.sqli_priority}**")
+            if s.why.get(cls):
+                lines.append(f"- Why: {s.why[cls]}")
+            lines.append("- Pastables: see **SQLi Candidate Surfaces** above.")
+            lines.append("")
+            continue
         if s.why.get(cls):
             lines.append(f"- Why: {s.why[cls]}")
         if s.notes.get(cls):
@@ -348,10 +424,7 @@ def render_manual_checks(result: ReconResult) -> str:
         if not blocks:
             continue
         any_verbose = True
-        path = s.page_path or "/"
-        display = path if str(path).startswith("/") else ("/" + path if path else "/")
-        if path == "":
-            display = "/"
+        display = _display_path(s)
         lines.append(f"## {s.method} {display} `{s.param}`")
         lines.append("")
         for cls, cmds in blocks:
@@ -418,12 +491,22 @@ def print_overview(result: ReconResult) -> None:
             info("  {bmagenta}" + cls + "{rst}: {byellow}" + str(n) + "{rst}")
     else:
         info("  (none)")
+    sqli_s = [s for s in result.surfaces if "sqli" in s.classes]
+    n_high = sum(1 for s in sqli_s if s.sqli_priority == "HIGH")
+    n_med = sum(1 for s in sqli_s if s.sqli_priority == "MEDIUM")
+    if sqli_s:
+        info(
+            "SQLi candidate sinks: {byellow}"
+            + str(n_high)
+            + "{rst} HIGH / {byellow}"
+            + str(n_med)
+            + "{rst} MEDIUM (pastables only, not sent)"
+        )
     info("{bright}Top candidate inputs:{rst}")
     ranked = [s for s in result.surfaces if s.classes]
     ranked.sort(key=lambda s: (_priority(s.classes[0]) if s.classes else 99, s.page_path, s.param))
     for i, s in enumerate(ranked[:8], 1):
-        path = s.page_path or "/"
-        display = "/" + path if path and not path.startswith("/") else (path or "/")
+        display = _display_path(s)
         info(
             "  "
             + str(i)

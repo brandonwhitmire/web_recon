@@ -89,6 +89,80 @@ class ExtractTests(unittest.TestCase):
         self.assertIn("upload_xml_family", flags)
         self.assertIn("accepts_xml", flags)
 
+    def test_login_form_flags(self):
+        soup = parse_html(
+            """
+            <form action="/login.php" method="post" id="loginform">
+              <input type="text" name="username">
+              <input type="password" name="password">
+              <input type="hidden" name="csrf" value="x">
+              <input type="checkbox" name="remember">
+              <button type="submit">Log in</button>
+            </form>
+            """
+        )
+        forms = extract_forms(soup, "http://box.web/login.php")
+        self.assertEqual(len(forms), 1)
+        by = {f.name: f for f in forms[0].fields}
+        self.assertIn("is_login_form", by["username"].flags)
+        self.assertIn("is_username_field", by["username"].flags)
+        self.assertIn("is_login_form", by["password"].flags)
+        self.assertIn("is_password_field", by["password"].flags)
+        self.assertIn("is_login_form", by["csrf"].flags)
+        self.assertNotIn("is_username_field", by["csrf"].flags)
+
+    def test_register_and_reset_are_login_adjacent(self):
+        soup = parse_html(
+            """
+            <form action="/register.php" method="post" id="registerform">
+              <input type="text" name="user_login">
+              <input type="email" name="user_email">
+              <input type="password" name="password">
+              <input type="password" name="password_confirm">
+            </form>
+            <form action="/lost-password" method="post">
+              <input type="email" name="email">
+            </form>
+            """
+        )
+        forms = extract_forms(soup, "http://box.web/")
+        self.assertEqual(len(forms), 2)
+        reg = next(f for f in forms if "register" in f.action)
+        reset = next(f for f in forms if "lost" in f.action)
+        ru = next(f for f in reg.fields if f.name == "user_login")
+        self.assertIn("is_login_adjacent_form", ru.flags)
+        self.assertIn("is_username_field", ru.flags)
+        self.assertNotIn("is_login_form", ru.flags)
+        remail = next(f for f in reset.fields if f.name == "email")
+        self.assertIn("is_login_adjacent_form", remail.flags)
+        self.assertIn("is_username_field", remail.flags)
+
+    def test_comment_and_newsletter_and_search_placeholder(self):
+        soup = parse_html(
+            """
+            <form id="commentform" action="/wp-comments-post.php" method="post">
+              <input type="text" name="author">
+              <textarea name="comment"></textarea>
+            </form>
+            <form action="/newsletter" method="post">
+              <input type="email" name="email">
+            </form>
+            <form action="/x" method="get">
+              <input type="text" name="foo" id="search-box" placeholder="Search products">
+            </form>
+            """
+        )
+        forms = extract_forms(soup, "http://box.web/")
+        comment = next(f for f in forms if any(fld.name == "comment" for fld in f.fields))
+        news = next(f for f in forms if "newsletter" in f.action)
+        search = next(f for f in forms if any(fld.name == "foo" for fld in f.fields))
+        cbody = next(f for f in comment.fields if f.name == "comment")
+        self.assertIn("is_comment_form", cbody.flags)
+        author = next(f for f in comment.fields if f.name == "author")
+        self.assertIn("is_comment_form", author.flags)
+        self.assertIn("is_newsletter_form", news.fields[0].flags)
+        self.assertIn("is_search_field", search.fields[0].flags)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -87,6 +87,7 @@ class E2ETests(unittest.TestCase):
         classified = (out / "classified.md").read_text(encoding="utf-8")
         self.assertIn("Candidate classes only", classified)
         self.assertIn("confirmed vulnerability", classified.lower())
+        self.assertIn("## SQLi Candidate Surfaces", classified)
         manual = (out / "manual_checks.md").read_text(encoding="utf-8")
         self.assertIn("10.10.14.8", manual)
         summary = (out / "summary.md").read_text(encoding="utf-8")

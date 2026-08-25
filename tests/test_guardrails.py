@@ -25,6 +25,17 @@ class GuardrailTests(unittest.TestCase):
         combined = "".join(self._src(n) for n in ("crawler.py", "extract.py", "pipeline.py"))
         self.assertNotIn("reflects_in_template_context", combined)
 
+    def test_sqli_pastables_do_not_emit_sqlmap(self):
+        from web_recon_heuristics import SQLI_AUTH_BYPASS, SQLI_BREAKOUT, SQLI_CURL, SQLI_SURVEY, SQLI_UNION, sqli_pastables
+
+        blob = "\n".join(
+            SQLI_BREAKOUT + SQLI_AUTH_BYPASS + SQLI_SURVEY + SQLI_UNION + SQLI_CURL
+        ).lower()
+        self.assertNotIn("sqlmap", blob)
+        for role in ("login", "search", "id"):
+            cmds = "\n".join(sqli_pastables(role, verbose=True)["commands"]).lower()
+            self.assertNotIn("sqlmap", cmds)
+
 
 if __name__ == "__main__":
     unittest.main()
