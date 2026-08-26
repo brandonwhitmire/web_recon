@@ -24,7 +24,7 @@ python -m web_recon --help
 
 `--attacker-ip` fills `<ATTACKER_IP>` in pastables. If omitted, the local address the OS would use to reach the target hostname (DNS/mDNS + routing) is used, then `tun0` if that cannot be determined.
 
-`--verbose` adds bypass ladders to `classified.md` (they always land in `manual_checks.md`).
+`--verbose` adds bypass ladders to `classified.md` and Phase 3 terminal output (they always land in `manual_checks.md`).
 
 `--debug` writes extra crawl/request detail to `debug.log`. Page, robots.txt, and sitemap failures always go to `errors.log`.
 
@@ -48,7 +48,7 @@ Filters: `--sqli` `--xss` `--ssti` `--ssrf` `--xxe` `--lfi` / `--file-inclusion`
 results/<target>/
   summary.md          headers, robots.txt, sitemap, tech fingerprint
   crawl_map.md        URLs, forms, params, comments
-  classified.md       input → candidate class → pastables
+  classified.md       candidate classes (high → low) → pastables
   manual_checks.md    extra / verbose pastables
   inventory.json
   errors.log          page / robots / sitemap failures

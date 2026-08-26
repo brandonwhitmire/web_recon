@@ -89,6 +89,23 @@ class SurfacePipelineTests(unittest.TestCase):
         self.assertIn("sqli", q.classes)
         self.assertEqual(q.sqli_priority, "HIGH")
         self.assertNotIn("sqli", lfi.classes)
+        md = render_classified(
+            ReconResult(
+                target="box.web",
+                start_url="http://box.web/index.php",
+                origin="http://box.web",
+                slug="box.web",
+                output_dir="/tmp",
+                fingerprint=Fingerprint(),
+                pages=[page],
+                surfaces=surfaces,
+            ),
+            include_verbose=False,
+        )
+        self.assertLess(md.find("## sqli"), md.find("## file_inclusion"))
+        self.assertLess(md.find("## file_inclusion"), md.find("## xss"))
+        self.assertLess(md.find("## xss"), md.find("## verb_tampering"))
+        self.assertNotIn("## Surfaces", md)
 
 
 class SqliSurfaceTests(unittest.TestCase):
@@ -316,7 +333,7 @@ class SqliPipelineTests(unittest.TestCase):
             class_counts={"sqli": 3},
         )
         md = render_classified(result, include_verbose=False)
-        self.assertIn("## SQLi Candidate Surfaces", md)
+        self.assertIn("## sqli", md)
         self.assertIn("### HIGH", md)
         self.assertIn("admin' -- -", md)
         self.assertNotIn("sqlmap -", md.lower())

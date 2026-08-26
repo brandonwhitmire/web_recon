@@ -9,7 +9,7 @@ from web_recon.cache import crawl_key, inventory_path, load_inventory, try_cache
 from web_recon.classify import classify_all, count_classes
 from web_recon.crawler import PassiveCrawler, php_files_from_pages
 from web_recon.models import Config, Fingerprint, ReconResult
-from web_recon.report import print_class_pastables, print_overview, print_phase1, write_all
+from web_recon.report import print_overview, print_phase1, print_phase3, write_all
 from web_recon.runlog import RunLog
 from web_recon.scope import origin_of, target_slug
 from web_recon.term import info, warn
@@ -18,9 +18,13 @@ from web_recon.util import detect_attacker_ip, ensure_dir
 
 
 def _emit(result: ReconResult, config: Config, *, from_cache: bool) -> None:
+    print_phase3(
+        result,
+        class_filters=config.class_filters,
+        verbose=config.verbose,
+        from_cache=from_cache,
+    )
     print_overview(result, class_filters=config.class_filters, from_cache=from_cache)
-    if config.class_filters:
-        print_class_pastables(result, config.class_filters, verbose=config.verbose)
 
 
 def _maybe_reclassify(result: ReconResult, attacker_ip: str | None) -> ReconResult:
@@ -181,13 +185,6 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
     info("Scope hosts: {byellow}" + (", ".join(sorted(crawler.scope_hosts)) or scope_host) + "{rst}")
 
     php_files = php_files_from_pages(pages)
-    info(
-        "{bblue}Phase 3 {green}(classify){rst} {byellow}"
-        + str(len(pages))
-        + "{rst} page(s) on {byellow}"
-        + scope_host
-        + "{rst}"
-    )
     surfaces = classify_all(
         pages,
         origin=origin,

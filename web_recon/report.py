@@ -8,7 +8,7 @@ from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 
-from web_recon.classify import _priority
+from web_recon.classify import CLASS_PRIORITY, _priority
 from web_recon.models import Fingerprint, Header, ReconResult, RobotsInfo, SitemapInfo, Surface
 from web_recon.term import detail, info
 
@@ -397,6 +397,32 @@ def render_crawl_map(result: ReconResult) -> str:
     return "\n".join(lines)
 
 
+def iter_class_groups(
+    result: ReconResult,
+    class_filters: list[str] | None = None,
+) -> list[tuple[str, list[Surface]]]:
+    """Classes in CLASS_PRIORITY order; surfaces inside each class high → low."""
+    wanted = set(class_filters or [])
+    groups: list[tuple[str, list[Surface]]] = []
+    for cls in CLASS_PRIORITY:
+        if wanted and cls not in wanted:
+            continue
+        hits = [s for s in result.surfaces if cls in s.classes]
+        if not hits:
+            continue
+        hits.sort(key=lambda s: _class_surface_sort_key(s, cls))
+        groups.append((cls, hits))
+    return groups
+
+
+def _class_surface_sort_key(s: Surface, cls: str) -> tuple:
+    if cls == "sqli":
+        rank = {"HIGH": 0, "MEDIUM": 1}.get(s.sqli_priority, 2)
+        return (rank,) + _sqli_sort_key(s)
+    kind_rank = {"form_field": 0, "query_param": 1, "js_param": 2, "site": 3}.get(s.kind, 9)
+    return (kind_rank, (s.page_path or "").lower(), s.param.lower(), s.method.upper())
+
+
 def render_classified(result: ReconResult, include_verbose: bool) -> str:
     lines: list[str] = []
     lines.append(f"# Classified input surfaces — {result.target}")
@@ -413,36 +439,40 @@ def render_classified(result: ReconResult, include_verbose: bool) -> str:
     else:
         lines.append("- _(no candidate classes)_")
     lines.append("")
-    lines.append("## SQLi Candidate Surfaces")
-    lines.append("")
-    lines.append(
-        "Auth and DB-lookup inputs only (login, search, id-style GET). "
-        "Not cookies, headers, uploads, or unrelated free-text. "
-        "**Candidate sinks** — this tool did not send payloads or submit forms."
-    )
-    lines.append("")
-    sqli_surfs = [s for s in result.surfaces if "sqli" in s.classes]
-    high = sorted([s for s in sqli_surfs if s.sqli_priority == "HIGH"], key=_sqli_sort_key)
-    medium = sorted([s for s in sqli_surfs if s.sqli_priority == "MEDIUM"], key=_sqli_sort_key)
-    if not sqli_surfs:
-        lines.append("_No HIGH/MEDIUM SQLi candidate sinks._")
+    groups = iter_class_groups(result)
+    if not groups:
+        lines.append("_No candidate classes._")
         lines.append("")
-    else:
-        for label, group in (("HIGH", high), ("MEDIUM", medium)):
-            lines.append(f"### {label}")
+    for cls, hits in groups:
+        lines.append(f"## {cls}")
+        lines.append("")
+        if cls == "sqli":
+            lines.append(
+                "Auth and DB-lookup inputs only (login, search, id-style GET). "
+                "Not cookies, headers, uploads, or unrelated free-text. "
+                "**Candidate sinks** — this tool did not send payloads or submit forms."
+            )
             lines.append("")
-            if not group:
-                lines.append("_None._")
+            for label in ("HIGH", "MEDIUM"):
+                group = [s for s in hits if s.sqli_priority == label]
+                lines.append(f"### {label}")
                 lines.append("")
-                continue
-            for s in group:
-                _sqli_sink_md(lines, s, include_verbose=include_verbose)
-    lines.append("## Surfaces")
-    lines.append("")
-    classified = [s for s in result.surfaces if s.classes]
+                if not group:
+                    lines.append("_None._")
+                    lines.append("")
+                    continue
+                for s in group:
+                    _sqli_sink_md(lines, s, include_verbose=include_verbose)
+            leftover = [s for s in hits if s.sqli_priority not in {"HIGH", "MEDIUM"}]
+            if leftover:
+                lines.append("### Other")
+                lines.append("")
+                for s in leftover:
+                    _sqli_sink_md(lines, s, include_verbose=include_verbose)
+            continue
+        for s in hits:
+            _surface_md(lines, s, include_verbose, cls)
     unclassified = [s for s in result.surfaces if not s.classes]
-    for s in classified:
-        _surface_md(lines, s, include_verbose=include_verbose)
     if unclassified:
         lines.append("## Unclassified inventory (no heuristic match)")
         lines.append("")
@@ -481,7 +511,7 @@ def _sqli_sink_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
         lines.append("")
 
 
-def _surface_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
+def _surface_md(lines: list[str], s: Surface, include_verbose: bool, cls: str) -> None:
     display = _display_path(s)
     lines.append(f"### {s.method} {display}  `{s.param}`")
     lines.append("")
@@ -496,38 +526,28 @@ def _surface_md(lines: list[str], s: Surface, include_verbose: bool) -> None:
         lines.append(f"- Flags: {', '.join(f'`{f}`' for f in s.context_flags)}")
     if s.evidence:
         lines.append(f"- Evidence: {s.evidence}")
-    lines.append(f"- Candidates: {', '.join(f'`{c}`' for c in s.classes)}")
-    if s.reflection_classes:
+    others = [c for c in s.classes if c != cls]
+    if others:
+        lines.append(f"- Also tagged: {', '.join(f'`{c}`' for c in others)}")
+    if cls in s.reflection_classes:
         lines.append(
-            "- Reflection: " + ", ".join(s.reflection_classes)
-            + " — manually confirm this reflects in the response (Page Source vs Inspect Element)."
+            "- Reflection: manually confirm this reflects in the response "
+            "(Page Source vs Inspect Element)."
         )
+    if s.why.get(cls):
+        lines.append(f"- Why: {s.why[cls]}")
+    if s.notes.get(cls):
+        lines.append(f"- Note: {s.notes[cls]}")
     lines.append("")
-    for cls in s.classes:
-        lines.append(f"#### {cls}")
+    cmds = list(s.canonical.get(cls) or [])
+    if include_verbose:
+        cmds.extend(s.verbose.get(cls) or [])
+    if cmds:
+        lines.append(fence("\n".join(cmds)))
         lines.append("")
-        if cls == "sqli":
-            if s.sqli_priority:
-                lines.append(f"- Priority: **{s.sqli_priority}**")
-            if s.why.get(cls):
-                lines.append(f"- Why: {s.why[cls]}")
-            lines.append("- Pastables: see **SQLi Candidate Surfaces** above.")
-            lines.append("")
-            continue
-        if s.why.get(cls):
-            lines.append(f"- Why: {s.why[cls]}")
-        if s.notes.get(cls):
-            lines.append(f"- Note: {s.notes[cls]}")
+    else:
+        lines.append("_No pastable template for this class._")
         lines.append("")
-        cmds = list(s.canonical.get(cls) or [])
-        if include_verbose:
-            cmds.extend(s.verbose.get(cls) or [])
-        if cmds:
-            lines.append(fence("\n".join(cmds)))
-            lines.append("")
-        else:
-            lines.append("_No pastable template for this class._")
-            lines.append("")
 
 
 def render_manual_checks(result: ReconResult) -> str:
@@ -590,6 +610,83 @@ def render_inventory(result: ReconResult) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
+def print_phase3(
+    result: ReconResult,
+    class_filters: list[str] | None = None,
+    verbose: bool = False,
+    *,
+    from_cache: bool = False,
+) -> None:
+    """Phase 3: classifier pastables grouped by class, high → low inside each class."""
+    extra = " {byellow}[from cache]{rst}" if from_cache else ""
+    n_pages = len(result.pages)
+    groups = iter_class_groups(result, class_filters)
+    print()
+    info(
+        "{bblue}Phase 3 {green}(classify){rst}"
+        + extra
+        + "  {byellow}"
+        + str(n_pages)
+        + "{rst} page(s)"
+    )
+    if class_filters:
+        info("Filter: {bmagenta}" + ", ".join(class_filters) + "{rst}")
+    if not groups:
+        if class_filters:
+            info("No surfaces matched filter {bmagenta}" + ", ".join(class_filters) + "{rst}.")
+        else:
+            info("No candidate classes.")
+        print()
+        return
+    for cls, hits in groups:
+        info("{bmagenta}" + cls + "{rst}: {byellow}" + str(len(hits)) + "{rst}")
+        if cls == "sqli":
+            for label in ("HIGH", "MEDIUM"):
+                group = [s for s in hits if s.sqli_priority == label]
+                if not group:
+                    continue
+                info("{byellow}" + label + "{rst} (" + str(len(group)) + ")")
+                for s in group:
+                    _print_surface_hit(s, cls, verbose)
+            leftover = [s for s in hits if s.sqli_priority not in {"HIGH", "MEDIUM"}]
+            for s in leftover:
+                _print_surface_hit(s, cls, verbose)
+        else:
+            for s in hits:
+                _print_surface_hit(s, cls, verbose)
+    print()
+
+
+def _print_surface_hit(s: Surface, cls: str, verbose: bool) -> None:
+    display = _display_path(s)
+    extra = ""
+    if cls == "sqli" and s.sqli_priority:
+        extra = " [" + s.sqli_priority + "]"
+    info(
+        "{bblue}"
+        + s.method
+        + "{rst} "
+        + display
+        + "  param={bgreen}"
+        + s.param
+        + "{rst}  {bmagenta}"
+        + cls
+        + extra
+        + "{rst}"
+    )
+    if s.why.get(cls):
+        info("  " + s.why[cls])
+    cmds = list(s.canonical.get(cls) or [])
+    if verbose:
+        cmds.extend(s.verbose.get(cls) or [])
+    if cmds:
+        print()
+        print("\n".join(cmds))
+        print()
+    else:
+        info("  (no pastable template)")
+
+
 def print_overview(result: ReconResult, class_filters: list[str] | None = None, from_cache: bool = False) -> None:
     filters = set(class_filters or [])
     surfaces = result.surfaces
@@ -644,34 +741,6 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
             + str(n_med)
             + "{rst} MEDIUM (pastables only, not sent)"
         )
-    info("{bright}Top candidate inputs:{rst}")
-    ranked = [s for s in surfaces if s.classes]
-    ranked.sort(
-        key=lambda s: (
-            _priority(next(c for c in s.classes if not filters or c in filters)),
-            s.page_path,
-            s.param,
-        )
-    )
-    shown = 8
-    for i, s in enumerate(ranked[:shown], 1):
-        display = _display_path(s)
-        labels = [c for c in s.classes if not filters or c in filters]
-        info(
-            "  "
-            + str(i)
-            + ". {bblue}"
-            + s.method
-            + "{rst} "
-            + display
-            + "  param={bgreen}"
-            + s.param
-            + "{rst}  [{bmagenta}"
-            + ", ".join(labels)
-            + "{rst}]"
-        )
-    if not ranked:
-        info("  (none)")
     classified = Path(result.output_dir) / "classified.md"
     manual = Path(result.output_dir) / "manual_checks.md"
     info(
@@ -686,42 +755,5 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
 
 
 def print_class_pastables(result: ReconResult, class_filters: list[str], verbose: bool = False) -> None:
-    """Dump matching pastables to the terminal (copy-pasteable, no [*] on payload lines)."""
-    filters = set(class_filters)
-    hits = [s for s in result.surfaces if any(c in filters for c in s.classes)]
-    if not hits:
-        info("No surfaces matched filter {bmagenta}" + ", ".join(class_filters) + "{rst}.")
-        return
-    info("{bright}=== Filtered pastables ({bmagenta}" + ", ".join(class_filters) + "{rst}{bright}) ==={rst}")
-    print()
-    for s in hits:
-        display = _display_path(s)
-        matching = [c for c in s.classes if c in filters]
-        for cls in matching:
-            extra = ""
-            if cls == "sqli" and s.sqli_priority:
-                extra = " [" + s.sqli_priority + "]"
-            info(
-                "{bblue}"
-                + s.method
-                + "{rst} "
-                + display
-                + "  param={bgreen}"
-                + s.param
-                + "{rst}  {bmagenta}"
-                + cls
-                + extra
-                + "{rst}"
-            )
-            if s.why.get(cls):
-                info("  " + s.why[cls])
-            cmds = list(s.canonical.get(cls) or [])
-            if verbose:
-                cmds.extend(s.verbose.get(cls) or [])
-            if cmds:
-                print()
-                print("\n".join(cmds))
-                print()
-            else:
-                info("  (no pastable template)")
-    print()
+    """Filtered Phase 3 dump (no banner)."""
+    print_phase3(result, class_filters=class_filters, verbose=verbose)

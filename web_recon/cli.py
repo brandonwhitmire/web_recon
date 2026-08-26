@@ -54,7 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("url", help="Target URL (http://host[:port][/path])")
     p.add_argument("-o", "--output", default="results", help="Results root directory (default: results)")
-    p.add_argument("-v", "--verbose", action="store_true", help="Include bypass ladders in classified.md and filtered terminal output (always written to manual_checks.md)")
+    p.add_argument("-v", "--verbose", action="store_true", help="Include bypass ladders in classified.md and Phase 3 terminal output (always written to manual_checks.md)")
     p.add_argument("--max-pages", type=int, default=80, help="Crawl cap (default: 80)")
     p.add_argument("--max-depth", type=int, default=5, help="Max link depth (default: 5)")
     p.add_argument("--timeout", type=int, default=20000, help="Playwright timeout in ms (default: 20000)")
