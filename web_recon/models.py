@@ -7,7 +7,7 @@ from typing import Any
 @dataclass
 class Config:
     start_url: str
-    output_root: str = "results"
+    output_root: str = "~"
     verbose: bool = False
     max_pages: int = 80
     max_depth: int = 5

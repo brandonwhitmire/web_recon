@@ -11,6 +11,7 @@ from web_recon.util import (
     detect_attacker_ip,
     host_port_from_target,
     parse_allow_methods,
+    scan_output_dir,
     source_ip_toward,
 )
 
@@ -92,6 +93,16 @@ class AllowMethodsTests(unittest.TestCase):
             parse_allow_methods("GET; PUT, GET"),
             ["GET", "PUT"],
         )
+
+
+class ScanOutputDirTests(unittest.TestCase):
+    def test_default_home_layout(self):
+        out = scan_output_dir("~", "forestsave.lab")
+        self.assertEqual(out, Path.home() / "results" / "forestsave.lab" / "web_scan")
+
+    def test_custom_root_still_nests_results_and_web_scan(self):
+        out = scan_output_dir("/tmp/loot", "10.10.11.12")
+        self.assertEqual(out, Path("/tmp/loot") / "results" / "10.10.11.12" / "web_scan")
 
 
 if __name__ == "__main__":

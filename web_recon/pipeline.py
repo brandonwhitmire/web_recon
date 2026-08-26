@@ -14,7 +14,7 @@ from web_recon.runlog import RunLog
 from web_recon.scope import origin_of, target_slug
 from web_recon.term import info, warn
 from web_recon.url_tree import LiveUrlTree, format_url_tree
-from web_recon.util import detect_attacker_ip, ensure_dir
+from web_recon.util import detect_attacker_ip, ensure_dir, scan_output_dir
 
 
 def _emit(result: ReconResult, config: Config, *, from_cache: bool) -> None:
@@ -78,7 +78,7 @@ async def run(config: Config) -> ReconResult:
 
     origin = origin_of(start)
     slug = target_slug(start)
-    out_dir = Path(config.output_root) / slug
+    out_dir = scan_output_dir(config.output_root, slug)
     ensure_dir(out_dir / "dom")
 
     runlog = RunLog(out_dir, debug=config.debug, target=start)

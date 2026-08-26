@@ -18,7 +18,7 @@ Python 3.10+.
 ```bash
 python -m web_recon http://10.10.11.12
 python -m web_recon http://target.web --verbose --attacker-ip 10.10.14.8
-python -m web_recon https://app.lab -o ./results --max-pages 40
+python -m web_recon https://app.lab -o /tmp --max-pages 40
 python -m web_recon --help
 ```
 
@@ -44,8 +44,10 @@ Filters: `--sqli` `--xss` `--ssti` `--ssrf` `--xxe` `--lfi` / `--file-inclusion`
 
 ## Output
 
+Default `--output` is `~`. Files land next to AutoRecon's other target dirs:
+
 ```
-results/<target>/
+~/results/<target>/web_scan/
   summary.md          headers, OPTIONS, robots.txt, sitemap, tech fingerprint
   crawl_map.md        URLs, forms, params, comments
   classified.md       candidate classes (high → low) → pastables
@@ -55,6 +57,8 @@ results/<target>/
   debug.log           only with --debug
   dom/                rendered DOM per page
 ```
+
+`--output /tmp` writes to `/tmp/results/<target>/web_scan/` instead.
 
 ## Tests
 

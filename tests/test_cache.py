@@ -131,6 +131,13 @@ class HelpTests(unittest.TestCase):
         text = build_parser().format_help()
         for flag in ("--sqli", "--xss", "--lfi", "--force-rescan", "--cmdi", "--verb-tampering", "--debug"):
             self.assertIn(flag, text)
+        self.assertIn("web_scan", text)
+
+    def test_output_defaults_to_home(self):
+        args = build_parser().parse_args(["http://box.web"])
+        self.assertEqual(args.output, "~")
+        args = build_parser().parse_args(["http://box.web", "-o", "/tmp"])
+        self.assertEqual(args.output, "/tmp")
 
 
 if __name__ == "__main__":

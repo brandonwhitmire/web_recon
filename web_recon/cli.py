@@ -40,7 +40,7 @@ Examples:
   python -m web_recon http://10.10.11.12 --lfi --verbose
   python -m web_recon http://10.10.11.12 --force-rescan
   python -m web_recon http://target.web --verbose --attacker-ip 10.10.14.8
-  python -m web_recon https://app.lab -o ./results --max-pages 40
+  python -m web_recon https://app.lab -o /tmp --max-pages 40
   python -m web_recon http://target.web --debug
 """
 
@@ -53,7 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("url", help="Target URL (http://host[:port][/path])")
-    p.add_argument("-o", "--output", default="results", help="Results root directory (default: results)")
+    p.add_argument(
+        "-o",
+        "--output",
+        default="~",
+        help="Parent directory (default: ~). Writes to <output>/results/<target>/web_scan/",
+    )
     p.add_argument("-v", "--verbose", action="store_true", help="Include bypass ladders in classified.md and Phase 3 terminal output (always written to manual_checks.md)")
     p.add_argument("--max-pages", type=int, default=80, help="Crawl cap (default: 80)")
     p.add_argument("--max-depth", type=int, default=5, help="Max link depth (default: 5)")

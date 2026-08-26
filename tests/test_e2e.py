@@ -84,6 +84,9 @@ class E2ETests(unittest.TestCase):
         )
         result = asyncio.run(run(cfg))
         out = Path(result.output_dir)
+        self.assertEqual(out.name, "web_scan")
+        self.assertEqual(out.parent.parent.name, "results")
+        self.assertTrue(out.is_relative_to(tmp))
         for name in ("summary.md", "crawl_map.md", "classified.md", "manual_checks.md", "inventory.json", "errors.log"):
             self.assertTrue((out / name).is_file(), name)
         self.assertFalse((out / "debug.log").is_file())

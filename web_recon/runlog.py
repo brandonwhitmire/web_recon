@@ -1,4 +1,4 @@
-"""Per-run log files under results/<target>/.
+"""Per-run log files under results/<target>/web_scan/.
 
 errors.log  — always written (page/robots/sitemap/pipeline failures)
 debug.log   — only with --debug (visit traces, hook noise, stack traces)

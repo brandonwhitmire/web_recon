@@ -141,6 +141,19 @@ def ensure_dir(path: str | Path) -> Path:
     return p
 
 
+RESULTS_DIR = "results"
+WEB_SCAN_DIR = "web_scan"
+
+
+def scan_output_dir(output_root: str | Path, slug: str) -> Path:
+    """AutoRecon-style layout: <output_root>/results/<target>/web_scan/.
+
+    ``--output`` defaults to ``~``, so files land in ``~/results/<target>/web_scan/``.
+    """
+    root = Path(output_root).expanduser()
+    return root / RESULTS_DIR / slug / WEB_SCAN_DIR
+
+
 def xml_localname(tag: str) -> str:
     return tag.split("}", 1)[-1] if tag else ""
 
