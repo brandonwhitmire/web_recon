@@ -72,15 +72,31 @@ def _print_headers_block(headers: list[Header]) -> None:
         detail("missing security headers: " + ", ".join(missing))
 
 
+def _short_fetch_error(err: str, url: str | None = None) -> str:
+    """Turn 'http://host/x: HTTP 404' / 'HTTP 404' into one compact line."""
+    text = (err or "").strip()
+    if ": HTTP " in text:
+        loc, _, code = text.partition(": HTTP ")
+        loc, code = loc.strip(), code.strip()
+        return f"HTTP {code}" + (f"  {loc}" if loc else "")
+    if text.upper().startswith("HTTP "):
+        return text + (f"  {url}" if url else "")
+    if url and text:
+        return f"{text}  {url}"
+    return text or (f"error  {url}" if url else "error")
+
+
 def _print_robots_block(robots: RobotsInfo | None) -> None:
     info("robots.txt")
     if not robots:
-        detail("(not fetched)")
+        detail("not fetched")
         return
-    status = f"status={robots.status}" if robots.status is not None else "not fetched"
+    failed = bool(robots.error) or (robots.status is not None and robots.status >= 400)
+    if failed:
+        detail(_short_fetch_error(robots.error or f"HTTP {robots.status}", robots.url))
+        return
+    status = f"status={robots.status}" if robots.status is not None else "ok"
     detail(robots.url + "  " + status)
-    if robots.error:
-        detail("error: " + robots.error)
     if robots.user_agents:
         detail("User-agent: " + ", ".join(robots.user_agents))
     if robots.disallow:
@@ -95,18 +111,21 @@ def _print_robots_block(robots: RobotsInfo | None) -> None:
         for s in robots.sitemaps:
             detail("Sitemap: " + s)
     raw_lines = (robots.raw or "").rstrip().splitlines()
-    if raw_lines and len(raw_lines) <= 30:
+    if raw_lines and len(raw_lines) <= 30 and not _looks_like_html(robots.raw):
         detail("---")
         for line in raw_lines:
             detail(line)
 
 
+def _looks_like_html(text: str | None) -> bool:
+    t = (text or "").lstrip()[:32].lower()
+    return t.startswith("<!doctype") or t.startswith("<html")
+
+
 def _print_wappalyzer_block(fp: Fingerprint) -> None:
     info("Wappalyzer")
-    if fp.wappalyzer_available:
-        detail("library: loaded")
-    else:
-        detail("library: not installed (header/cookie/html signatures only)")
+    if not fp.wappalyzer_available:
+        detail("not installed — pip install -r requirements.txt")
     if fp.server:
         detail("Server: " + fp.server)
     if fp.powered_by:
@@ -116,7 +135,12 @@ def _print_wappalyzer_block(fp: Fingerprint) -> None:
     if not fp.hits:
         detail("(no technology signatures matched)")
         return
+    seen: set[str] = set()
     for h in fp.hits:
+        key = h.name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
         ver = f" {h.version}" if h.version else ""
         src = f"  [{h.source}]" if h.source else ""
         detail(f"{h.name}{ver}  ({h.category}){src}")
@@ -125,25 +149,25 @@ def _print_wappalyzer_block(fp: Fingerprint) -> None:
 def _print_sitemap_block(sitemap: SitemapInfo | None) -> None:
     info("sitemap.xml")
     if not sitemap:
-        detail("(not fetched)")
+        detail("not fetched")
         return
-    if sitemap.requested:
+    urls = list(sitemap.urls or [])
+    if sitemap.errors and not urls:
+        for e in sitemap.errors:
+            detail(_short_fetch_error(e))
+        return
+    if sitemap.requested and urls:
         for u in sitemap.requested:
             detail("requested: " + u)
-    urls = list(sitemap.urls or [])
     detail(f"entries: {len(urls)}")
-    if not urls:
-        detail("(none)")
-    else:
-        shown = urls[:SITEMAP_PRINT_CAP]
-        for u in shown:
-            detail(u)
-        extra = len(urls) - len(shown)
-        if extra > 0:
-            detail(f"… +{extra} more (see summary.md)")
-    if sitemap.errors:
-        for e in sitemap.errors:
-            detail("error: " + e)
+    shown = urls[:SITEMAP_PRINT_CAP]
+    for u in shown:
+        detail(u)
+    extra = len(urls) - len(shown)
+    if extra > 0:
+        detail(f"… +{extra} more (see summary.md)")
+    for e in sitemap.errors or []:
+        detail(_short_fetch_error(e))
 
 
 def _display_path(s: Surface) -> str:
@@ -236,11 +260,11 @@ def render_summary(result: ReconResult) -> str:
     rob = result.robots
     if not rob:
         lines.append("_Not fetched._")
+    elif rob.error or (rob.status is not None and rob.status >= 400):
+        lines.append(f"- {_short_fetch_error(rob.error or f'HTTP {rob.status}', rob.url)}")
     else:
         lines.append(f"- URL: `{rob.url}`")
         lines.append(f"- Fetched: `{rob.fetched}` status={rob.status!s}")
-        if rob.error:
-            lines.append(f"- Note: {rob.error}")
         if rob.user_agents:
             lines.append(f"- User-agent: {', '.join(f'`{u}`' for u in rob.user_agents)}")
         if rob.disallow:
@@ -261,7 +285,7 @@ def render_summary(result: ReconResult) -> str:
             lines.append("- Other:")
             for o in rob.other:
                 lines.append(f"  - `{o}`")
-        if rob.raw:
+        if rob.raw and not _looks_like_html(rob.raw):
             lines.append("")
             lines.append("### Raw")
             lines.append("")
@@ -272,6 +296,9 @@ def render_summary(result: ReconResult) -> str:
     sm = result.sitemap
     if not sm:
         lines.append("_Not fetched._")
+    elif sm.errors and not sm.urls:
+        for e in sm.errors:
+            lines.append(f"- {_short_fetch_error(e)}")
     else:
         if sm.requested:
             lines.append("- Requested:")
@@ -286,7 +313,7 @@ def render_summary(result: ReconResult) -> str:
         if sm.errors:
             lines.append("- Errors:")
             for e in sm.errors:
-                lines.append(f"  - {e}")
+                lines.append(f"  - {_short_fetch_error(e)}")
     lines.append("")
     lines.append("## Tech fingerprint")
     lines.append("")

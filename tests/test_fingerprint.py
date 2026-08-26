@@ -30,6 +30,20 @@ class FingerprintTests(unittest.TestCase):
         self.assertIn("PHP", names)
         self.assertTrue(any("WordPress" in h.name or "WordPress" in (h.evidence or "") for h in fp.hits) or "WordPress" in names)
 
+    def test_wappalyzer_library_is_required_dep(self):
+        from web_recon.fingerprint import _HAS_WAPPALYZER, _wappalyzer
+
+        self.assertTrue(_HAS_WAPPALYZER, "wappalyzer-python3 must be in requirements.txt / project dependencies")
+        self.assertIsNotNone(_wappalyzer())
+        html = '<html><head><meta name="generator" content="WordPress 6.4"></head><body class="wp-content">x</body></html>'
+        fp = fingerprint_page(
+            "http://box.web/",
+            html,
+            [Header(name="Server", value="Apache/2.4.52 (Ubuntu)")],
+        )
+        self.assertTrue(fp.wappalyzer_available)
+        self.assertTrue(any(h.source == "wappalyzer" for h in fp.hits))
+
 
 if __name__ == "__main__":
     unittest.main()

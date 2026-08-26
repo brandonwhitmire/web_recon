@@ -102,7 +102,7 @@ class PassiveCrawler:
             self._err(f"robots.txt: {err}")
             return info
         if status and status >= 400:
-            info = RobotsInfo(url=url, fetched=True, status=status, raw=body, error=f"HTTP {status}")
+            info = RobotsInfo(url=url, fetched=True, status=status, error=f"HTTP {status}")
             self._dbg(f"robots.txt: HTTP {status}")
             return info
         parsed = parse_robots(body, url, status)

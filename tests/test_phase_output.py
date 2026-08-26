@@ -44,6 +44,70 @@ class Phase1PrintTests(unittest.TestCase):
         self.assertIn("WordPress", blob)
         self.assertIn("http://box.web/?p=1", blob)
 
+    def test_robots_and_sitemap_404_are_one_line(self):
+        details: list[str] = []
+        with patch("web_recon.report.info"):
+            with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
+                print_phase1(
+                    "http://box.web/",
+                    [Header(name="Server", value="Apache")],
+                    RobotsInfo(
+                        url="http://box.web/robots.txt",
+                        fetched=True,
+                        status=404,
+                        raw="<!DOCTYPE HTML><html>404</html>",
+                        error="HTTP 404",
+                    ),
+                    Fingerprint(wappalyzer_available=True, hits=[TechHit(name="Apache", category="Web servers", source="wappalyzer")]),
+                    SitemapInfo(
+                        requested=["http://box.web/sitemap.xml"],
+                        urls=[],
+                        errors=["http://box.web/sitemap.xml: HTTP 404"],
+                    ),
+                    include_banner=False,
+                )
+        blob = "\n".join(details)
+        self.assertIn("HTTP 404  http://box.web/robots.txt", blob)
+        self.assertIn("HTTP 404  http://box.web/sitemap.xml", blob)
+        self.assertNotIn("Disallow", blob)
+        self.assertNotIn("DOCTYPE", blob)
+        self.assertNotIn("entries: 0", blob)
+        self.assertNotIn("(none)", blob)
+        self.assertNotIn("not installed", blob)
+        self.assertIn("Apache", blob)
+
+
+class SummaryErrorTests(unittest.TestCase):
+    def test_summary_omits_404_html(self):
+        from web_recon.report import render_summary
+
+        md = render_summary(
+            ReconResult(
+                target="box.web",
+                start_url="http://box.web/",
+                origin="http://box.web",
+                slug="box.web",
+                output_dir="/tmp",
+                fingerprint=Fingerprint(),
+                robots=RobotsInfo(
+                    url="http://box.web/robots.txt",
+                    fetched=True,
+                    status=404,
+                    raw="<!DOCTYPE HTML><html><title>404 Not Found</title></html>",
+                    error="HTTP 404",
+                ),
+                sitemap=SitemapInfo(
+                    requested=["http://box.web/sitemap.xml"],
+                    errors=["http://box.web/sitemap.xml: HTTP 404"],
+                ),
+            )
+        )
+        self.assertIn("HTTP 404  http://box.web/robots.txt", md)
+        self.assertIn("HTTP 404  http://box.web/sitemap.xml", md)
+        self.assertNotIn("DOCTYPE", md)
+        self.assertNotIn("Disallow", md)
+        self.assertNotIn("### Raw", md)
+
 
 def _surf(**kwargs) -> Surface:
     base = dict(

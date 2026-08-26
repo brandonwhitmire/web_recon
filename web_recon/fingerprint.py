@@ -1,7 +1,8 @@
 """Passive technology fingerprinting from already-fetched HTML, headers, and cookies.
 
-Uses bundled Wappalyzer rules when the optional library is importable. Never fetches
-its own copy of the page (update=False). Falls back to local header/cookie/html signatures.
+Uses Wappalyzer (required: wappalyzer-python3) against HTML already retrieved.
+Never fetches its own copy of the page (update=False). Also applies local
+header/cookie/HTML signatures.
 """
 
 from __future__ import annotations
@@ -207,7 +208,8 @@ def fingerprint_page(
                 cat = cats[0] if cats else "Wappalyzer"
                 hits.append(TechHit(str(name), str(cat), version=str(ver) if ver else None, evidence="Wappalyzer rule match", source="wappalyzer"))
         except Exception:
-            fp.wappalyzer_available = False
+            # Library is present; a single-page analyze failure is not "not installed".
+            pass
 
     fp.os_hints = _uniq(fp.os_hints)
     fp.hits = _dedupe_hits(hits)
