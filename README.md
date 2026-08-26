@@ -22,9 +22,11 @@ python -m web_recon https://app.lab -o ./results --max-pages 40
 python -m web_recon --help
 ```
 
-`--attacker-ip` fills `<ATTACKER_IP>` in pastables. If omitted, `tun0` is used when present.
+`--attacker-ip` fills `<ATTACKER_IP>` in pastables. If omitted, the local address the OS would use to reach the target hostname (DNS/mDNS + routing) is used, then `tun0` if that cannot be determined.
 
 `--verbose` adds bypass ladders to `classified.md` (they always land in `manual_checks.md`).
+
+`--debug` writes extra crawl/request detail to `debug.log`. Page, robots.txt, and sitemap failures always go to `errors.log`.
 
 ### Cache and filters
 
@@ -49,6 +51,8 @@ results/<target>/
   classified.md       input → candidate class → pastables
   manual_checks.md    extra / verbose pastables
   inventory.json
+  errors.log          page / robots / sitemap failures
+  debug.log           only with --debug
   dom/                rendered DOM per page
 ```
 
@@ -62,5 +66,5 @@ python -m unittest discover -s tests -t . -v
 E2E needs Chromium (`playwright install chromium`); it skips if Chromium is missing. Unit tests only:
 
 ```bash
-python -m unittest tests.test_classify tests.test_extract tests.test_fingerprint tests.test_guardrails tests.test_scope -v
+python -m unittest tests.test_classify tests.test_extract tests.test_fingerprint tests.test_guardrails tests.test_scope tests.test_util tests.test_url_tree tests.test_runlog tests.test_phase_output -v
 ```

@@ -43,6 +43,7 @@ from web_recon.scope import (
     normalize_url,
     origin_of,
 )
+from web_recon.runlog import RunLog
 from web_recon.util import parse_robots, parse_sitemap_locs, sanitize_filename
 
 DEFAULT_UA = (
@@ -52,7 +53,7 @@ DEFAULT_UA = (
 
 
 class PassiveCrawler:
-    def __init__(self, config: Config, scope_host: str | set[str], origin: str, dom_dir):
+    def __init__(self, config: Config, scope_host: str | set[str], origin: str, dom_dir, runlog: RunLog | None = None):
         self.config = config
         if isinstance(scope_host, str):
             self.scope_hosts = {scope_host.lower()} if scope_host else set()
@@ -60,11 +61,20 @@ class PassiveCrawler:
             self.scope_hosts = {h.lower() for h in scope_host if h}
         self.origin = origin
         self.dom_dir = dom_dir
+        self.runlog = runlog
         self.used_names: set[str] = set()
         self.fingerprints: list[Fingerprint] = []
         self.robots: RobotsInfo | None = None
         self.sitemap: SitemapInfo | None = None
         self.merged_fingerprint: Fingerprint = Fingerprint()
+
+    def _err(self, msg: str, *, exc: BaseException | None = None) -> None:
+        if self.runlog:
+            self.runlog.error(msg, exc=exc)
+
+    def _dbg(self, msg: str, *, exc: BaseException | None = None) -> None:
+        if self.runlog:
+            self.runlog.debug(msg, exc=exc)
 
     async def fetch_text(self, request_ctx, url: str) -> tuple[int | None, str, list[Header], str | None]:
         try:
@@ -80,16 +90,24 @@ class PassiveCrawler:
             headers = await _headers_from_playwright(resp)
             return resp.status, body, headers, None
         except Exception as exc:
+            self._dbg(f"GET {url} failed", exc=exc)
             return None, "", [], str(exc)
 
     async def fetch_robots(self, request_ctx) -> RobotsInfo:
         url = urljoin(self.origin + "/", "/robots.txt")
+        self._dbg(f"GET {url}")
         status, body, _headers, err = await self.fetch_text(request_ctx, url)
         if err:
-            return RobotsInfo(url=url, fetched=False, error=err)
+            info = RobotsInfo(url=url, fetched=False, error=err)
+            self._err(f"robots.txt: {err}")
+            return info
         if status and status >= 400:
-            return RobotsInfo(url=url, fetched=True, status=status, raw=body, error=f"HTTP {status}")
-        return parse_robots(body, url, status)
+            info = RobotsInfo(url=url, fetched=True, status=status, raw=body, error=f"HTTP {status}")
+            self._dbg(f"robots.txt: HTTP {status}")
+            return info
+        parsed = parse_robots(body, url, status)
+        self._dbg(f"robots.txt status={status} disallow={len(parsed.disallow)} sitemaps={len(parsed.sitemaps)}")
+        return parsed
 
     async def fetch_sitemaps(self, request_ctx, extra_sitemap_urls: list[str]) -> SitemapInfo:
         info = SitemapInfo()
@@ -107,15 +125,19 @@ class PassiveCrawler:
                 continue
             seen_maps.add(sm_url)
             info.requested.append(sm_url)
+            self._dbg(f"GET {sm_url}")
             status, body, _headers, err = await self.fetch_text(request_ctx, sm_url)
             if err:
                 info.errors.append(f"{sm_url}: {err}")
+                self._err(f"sitemap: {sm_url}: {err}")
                 continue
             if status and status >= 400:
                 info.errors.append(f"{sm_url}: HTTP {status}")
+                self._dbg(f"sitemap: {sm_url}: HTTP {status}")
                 continue
             if not body.strip():
                 info.errors.append(f"{sm_url}: empty")
+                self._dbg(f"sitemap: {sm_url}: empty")
                 continue
             urls, nested = parse_sitemap_locs(body)
             for loc in urls:
@@ -136,7 +158,8 @@ class PassiveCrawler:
         def _on_request(req) -> None:
             try:
                 u = req.url
-            except Exception:
+            except Exception as exc:
+                self._dbg("request hook failed", exc=exc)
                 return
             n = normalize_url(u)
             if n and in_scope(n, self.scope_hosts) and n not in observed:
@@ -159,12 +182,17 @@ class PassiveCrawler:
                 text = await resp.text()
                 if text:
                     js_bodies.append(text[:200_000])
-            except Exception:
+            except Exception as exc:
+                self._dbg("response hook failed", exc=exc)
                 return
 
         page.on("request", _on_request)
         page.on("response", _on_response)
+        if self.runlog and self.runlog.debug_enabled:
+            page.on("pageerror", lambda err: self._dbg(f"pageerror {url}: {err}"))
+            page.on("requestfailed", lambda req: self._dbg(f"requestfailed {req.url} {req.failure}"))
         rec = PageRecord(url=url, final_url=url, status=None, depth=depth)
+        self._dbg(f"visit depth={depth} {url}")
         try:
             response = await page.goto(
                 url,
@@ -188,6 +216,7 @@ class PassiveCrawler:
             if not in_scope(rec.final_url, self.scope_hosts):
                 rec.error = f"redirected out of scope to {rec.final_url}"
                 rec.out_of_scope.append(rec.final_url)
+                self._dbg(f"{url}: {rec.error}")
                 return rec
 
             if response is not None:
@@ -229,10 +258,13 @@ class PassiveCrawler:
             path = self.dom_dir / fname
             path.write_text(html, encoding="utf-8", errors="replace")
             rec.dom_path = str(path)
+            self._dbg(f"  status={rec.status} final={rec.final_url} title={rec.title!r} forms={len(rec.forms)}")
         except PlaywrightTimeout:
             rec.error = f"timeout after {self.config.timeout_ms}ms"
+            self._err(f"{url}: {rec.error}")
         except Exception as exc:
             rec.error = str(exc)
+            self._err(f"{url}: {rec.error}", exc=exc)
         finally:
             await page.close()
         return rec
@@ -241,6 +273,7 @@ class PassiveCrawler:
         self,
         seed_urls: list[str],
         progress=None,
+        on_phase1=None,
     ) -> list[PageRecord]:
         cfg = self.config
         pages: list[PageRecord] = []
@@ -274,8 +307,6 @@ class PassiveCrawler:
 
             try:
                 for url, depth in first_seeds:
-                    if progress:
-                        progress(1, cfg.max_pages, url)
                     rec = await self.visit(context, url, depth)
                     pages.append(rec)
                     seen.add(crawl_identity(rec.final_url or rec.url))
@@ -292,6 +323,13 @@ class PassiveCrawler:
                 self.robots = await self.fetch_robots(context.request)
                 extra_sitemaps = list(self.robots.sitemaps) if self.robots else []
                 self.sitemap = await self.fetch_sitemaps(context.request, extra_sitemaps)
+                self.merged_fingerprint = merge_fingerprints(self.fingerprints)
+                self._dbg(
+                    f"phase1 done pages={len(pages)} robots={bool(self.robots)} "
+                    f"sitemap_urls={len(self.sitemap.urls) if self.sitemap else 0}"
+                )
+                if on_phase1:
+                    on_phase1(pages)
                 if cfg.enqueue_sitemap:
                     for loc in self.sitemap.urls:
                         if not in_scope(loc, self.scope_hosts):

@@ -101,3 +101,9 @@ def error(msg: str) -> None:
 def debug(msg: str) -> None:
     """AutoRecon debug: green [-]"""
     cprint(msg, color=_FORE["green"], char="-")
+
+
+def detail(msg: str) -> None:
+    """Indented body line with no [*] prefix (headers, tree, robots dump)."""
+    on = color_enabled(sys.stdout)
+    print("    " + colorize(msg, enabled=on, file=sys.stdout))

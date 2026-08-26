@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import sys
+import traceback
 
 from web_recon import __version__
 from web_recon.filters import FILTER_FLAGS, classes_from_args
@@ -40,6 +41,7 @@ Examples:
   python -m web_recon http://10.10.11.12 --force-rescan
   python -m web_recon http://target.web --verbose --attacker-ip 10.10.14.8
   python -m web_recon https://app.lab -o ./results --max-pages 40
+  python -m web_recon http://target.web --debug
 """
 
 
@@ -58,12 +60,21 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--timeout", type=int, default=20000, help="Playwright timeout in ms (default: 20000)")
     p.add_argument("--settle-ms", type=int, default=1000, help="Extra DOM settle wait after networkidle (default: 1000)")
     p.add_argument("--delay", type=float, default=0.35, help="Delay between page GETs in seconds (default: 0.35)")
-    p.add_argument("--attacker-ip", default=None, help="Fill <ATTACKER_IP> in pastables (default: tun0 if present)")
+    p.add_argument(
+        "--attacker-ip",
+        default=None,
+        help="Fill <ATTACKER_IP> in pastables (default: local IP used to reach the target, else tun0)",
+    )
     p.add_argument("--user-agent", default=None, help="Override User-Agent")
     p.add_argument("--tls-verify", action="store_true", help="Verify TLS certificates (default: off, lab-friendly)")
     p.add_argument("--no-sitemap-crawl", action="store_true", help="List sitemap entries but do not enqueue them")
     p.add_argument("--headed", action="store_true", help="Run Chromium headed (debug)")
     p.add_argument("--force-rescan", action="store_true", help="Ignore cached crawl results and recrawl")
+    p.add_argument(
+        "--debug",
+        action="store_true",
+        help="Write debug.log with crawl/request detail (errors always go to errors.log)",
+    )
     p.add_argument("--version", action="version", version=f"web-recon {__version__}")
 
     filt = p.add_argument_group(
@@ -110,6 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         enqueue_sitemap=not args.no_sitemap_crawl,
         headless=not args.headed,
         force_rescan=args.force_rescan,
+        debug=args.debug,
         class_filters=classes_from_args(args),
     )
     try:
@@ -121,6 +133,8 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         msg = str(exc)
         error(msg)
+        if args.debug:
+            traceback.print_exc()
         if "Executable doesn't exist" in msg or ("playwright" in msg.lower() and "chromium" in msg.lower()):
             error("hint: playwright install chromium")
         return 1

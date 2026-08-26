@@ -9,24 +9,12 @@ from web_recon.cache import crawl_key, inventory_path, load_inventory, try_cache
 from web_recon.classify import classify_all, count_classes
 from web_recon.crawler import PassiveCrawler, php_files_from_pages
 from web_recon.models import Config, Fingerprint, ReconResult
-from web_recon.report import print_class_pastables, print_overview, write_all
+from web_recon.report import print_class_pastables, print_overview, print_phase1, write_all
+from web_recon.runlog import RunLog
 from web_recon.scope import origin_of, target_slug
 from web_recon.term import info, warn
+from web_recon.url_tree import LiveUrlTree, format_url_tree
 from web_recon.util import detect_attacker_ip, ensure_dir
-
-
-def _progress(i: int, total: int, url: str) -> None:
-    host = urlparse(url).hostname or ""
-    info(
-        "{bright}[{yellow}"
-        + host
-        + "{crst}/{bgreen}crawl{crst}]{rst} ["
-        + str(i)
-        + "/"
-        + str(total)
-        + "] "
-        + url
-    )
 
 
 def _emit(result: ReconResult, config: Config, *, from_cache: bool) -> None:
@@ -50,6 +38,29 @@ def _maybe_reclassify(result: ReconResult, attacker_ip: str | None) -> ReconResu
     return result
 
 
+def _ingest_cached_errors(runlog: RunLog, result: ReconResult) -> None:
+    seen: set[str] = set()
+    for p in result.pages:
+        if not p.error:
+            continue
+        line = f"{p.final_url or p.url}: {p.error}"
+        if line in seen:
+            continue
+        seen.add(line)
+        runlog.error(line)
+
+
+def _print_phase2_tree(host: str, urls: list[str], *, from_cache: bool) -> None:
+    extra = " {byellow}[from cache]{rst}" if from_cache else ""
+    info("{bblue}Phase 2 {green}(rendered-DOM crawl){rst}" + extra)
+    info("{bright}[{yellow}" + host + "{crst}/{bgreen}crawl{crst}]{rst}")
+    print(format_url_tree(urls, host))
+
+
+def _phase1_headers(pages) -> list:
+    return pages[0].headers if pages else []
+
+
 async def run(config: Config) -> ReconResult:
     start = config.start_url.strip()
     if not start.startswith(("http://", "https://")):
@@ -65,7 +76,18 @@ async def run(config: Config) -> ReconResult:
     out_dir = Path(config.output_root) / slug
     ensure_dir(out_dir / "dom")
 
-    attacker_ip = config.attacker_ip or detect_attacker_ip()
+    runlog = RunLog(out_dir, debug=config.debug, target=start)
+    try:
+        return await _run(config, start, parsed, origin, slug, out_dir, runlog)
+    except Exception as exc:
+        runlog.error(f"fatal: {exc}", exc=exc)
+        raise
+    finally:
+        runlog.close()
+
+
+async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_dir: Path, runlog: RunLog) -> ReconResult:
+    attacker_ip = config.attacker_ip or detect_attacker_ip(start)
     scope_host = (parsed.hostname or "").lower()
     key = crawl_key(config)
 
@@ -76,28 +98,86 @@ async def run(config: Config) -> ReconResult:
         info("Attacker IP (for pastable fill): {byellow}" + attacker_ip + "{rst}")
     else:
         warn("Attacker IP unknown — leaving <ATTACKER_IP> placeholder")
+    if config.debug:
+        info("Debug log: {bgreen}" + str(runlog.debug_path) + "{rst}")
+    runlog.debug(f"start={start} scope={scope_host} attacker_ip={attacker_ip} debug={config.debug}")
 
     if not config.force_rescan:
         cached = try_cache(out_dir, key)
         if cached:
+            runlog.debug("cache hit")
             cached = _maybe_reclassify(cached, attacker_ip)
+            _ingest_cached_errors(runlog, cached)
+            runlog.write_errors()
+            print()
+            print_phase1(
+                cached.start_url,
+                cached.start_headers,
+                cached.robots,
+                cached.fingerprint,
+                cached.sitemap,
+                from_cache=True,
+            )
+            print()
+            urls = [p.final_url or p.url for p in cached.pages]
+            _print_phase2_tree(cached.target or scope_host, urls, from_cache=True)
             _emit(cached, config, from_cache=True)
             return cached
         existing = load_inventory(inventory_path(out_dir))
         if existing:
             info("Cached inventory found but crawl options differ — rescanning.")
+            runlog.debug("cache miss (options differ)")
     else:
         info("{byellow}--force-rescan{rst} — ignoring cache.")
+        runlog.debug("force-rescan")
 
-    crawler = PassiveCrawler(config, scope_host=scope_host, origin=origin, dom_dir=out_dir / "dom")
-
+    crawler = PassiveCrawler(
+        config,
+        scope_host=scope_host,
+        origin=origin,
+        dom_dir=out_dir / "dom",
+        runlog=runlog,
+    )
+    tree: LiveUrlTree | None = None
+    print()
     info(
-        "{bblue}Phase 1–2 {green}(robots.txt, sitemap.xml, rendered-DOM crawl){rst} running against {byellow}"
+        "{bblue}Phase 1 {green}(headers, robots.txt, Wappalyzer, sitemap){rst} "
+        "running against {byellow}"
         + start
         + "{rst}"
     )
-    pages = await crawler.crawl([start], progress=_progress)
+
+    def on_phase1(pages) -> None:
+        nonlocal tree
+        host = (urlparse(crawler.origin).hostname or scope_host).lower()
+        print_phase1(
+            start,
+            _phase1_headers(pages),
+            crawler.robots,
+            crawler.merged_fingerprint or Fingerprint(),
+            crawler.sitemap,
+            include_banner=False,
+        )
+        print()
+        info("{bblue}Phase 2 {green}(rendered-DOM crawl){rst}")
+        tree = LiveUrlTree(host)
+        info(tree.header_line())
+        for line in tree.start_lines():
+            print(line)
+        for rec in pages:
+            for line in tree.add(rec.final_url or rec.url):
+                print(line)
+
+    def progress(i: int, total: int, url: str) -> None:
+        runlog.debug(f"crawl [{i}/{total}] {url}")
+        if tree is None:
+            return
+        for line in tree.add(url):
+            print(line)
+
+    pages = await crawler.crawl([start], progress=progress, on_phase1=on_phase1)
     origin = crawler.origin or origin
+    print()
     info("Scope hosts: {byellow}" + (", ".join(sorted(crawler.scope_hosts)) or scope_host) + "{rst}")
 
     php_files = php_files_from_pages(pages)
@@ -125,6 +205,7 @@ async def run(config: Config) -> ReconResult:
         output_dir=str(out_dir),
         config={
             "verbose": config.verbose,
+            "debug": config.debug,
             "crawl": key,
         },
         start_headers=start_headers,
@@ -139,5 +220,6 @@ async def run(config: Config) -> ReconResult:
         errors=[p.error for p in pages if p.error],
     )
     write_all(result, verbose=config.verbose)
+    runlog.write_errors()
     _emit(result, config, from_cache=False)
     return result

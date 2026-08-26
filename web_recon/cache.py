@@ -1,7 +1,7 @@
 """Crawl-result cache. Identity is structured crawl options, not argv order.
 
-Classifier filters (--sqli, --xss, …) and --verbose are output-only and do not
-change the cache key. --force-rescan skips the cache.
+Classifier filters (--sqli, --xss, …), --verbose, and --debug are output-only
+and do not change the cache key. --force-rescan skips the cache.
 """
 
 from __future__ import annotations

@@ -9,8 +9,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from web_recon.classify import _priority
-from web_recon.models import Fingerprint, Header, ReconResult, Surface
-from web_recon.term import info
+from web_recon.models import Fingerprint, Header, ReconResult, RobotsInfo, SitemapInfo, Surface
+from web_recon.term import detail, info
 
 SECURITY_HEADERS = [
     "Content-Security-Policy",
@@ -24,6 +24,126 @@ SECURITY_HEADERS = [
     "Cross-Origin-Opener-Policy",
     "Cross-Origin-Resource-Policy",
 ]
+
+
+SITEMAP_PRINT_CAP = 40
+HEADER_VALUE_MAX = 240
+
+
+def print_phase1(
+    start_url: str,
+    headers: list[Header],
+    robots: RobotsInfo | None,
+    fingerprint: Fingerprint,
+    sitemap: SitemapInfo | None,
+    *,
+    from_cache: bool = False,
+    include_banner: bool = True,
+) -> None:
+    """Terminal Phase 1: headers, robots.txt, Wappalyzer, sitemap (last)."""
+    if include_banner:
+        extra = " {byellow}[from cache]{rst}" if from_cache else ""
+        info(
+            "{bblue}Phase 1 {green}(headers, robots.txt, Wappalyzer, sitemap){rst} "
+            "running against {byellow}"
+            + start_url
+            + "{rst}"
+            + extra
+        )
+    _print_headers_block(headers)
+    _print_robots_block(robots)
+    _print_wappalyzer_block(fingerprint)
+    _print_sitemap_block(sitemap)
+
+
+def _print_headers_block(headers: list[Header]) -> None:
+    info("HTTP headers")
+    if not headers:
+        detail("(none captured)")
+        return
+    for h in headers:
+        val = h.value or ""
+        if len(val) > HEADER_VALUE_MAX:
+            val = val[:HEADER_VALUE_MAX] + "…"
+        detail(f"{h.name}: {val}")
+    present = {h.name.lower() for h in headers}
+    missing = [n for n in SECURITY_HEADERS if n.lower() not in present]
+    if missing:
+        detail("missing security headers: " + ", ".join(missing))
+
+
+def _print_robots_block(robots: RobotsInfo | None) -> None:
+    info("robots.txt")
+    if not robots:
+        detail("(not fetched)")
+        return
+    status = f"status={robots.status}" if robots.status is not None else "not fetched"
+    detail(robots.url + "  " + status)
+    if robots.error:
+        detail("error: " + robots.error)
+    if robots.user_agents:
+        detail("User-agent: " + ", ".join(robots.user_agents))
+    if robots.disallow:
+        for d in robots.disallow:
+            detail("Disallow: " + d)
+    else:
+        detail("Disallow: (none)")
+    if robots.allow:
+        for a in robots.allow:
+            detail("Allow: " + a)
+    if robots.sitemaps:
+        for s in robots.sitemaps:
+            detail("Sitemap: " + s)
+    raw_lines = (robots.raw or "").rstrip().splitlines()
+    if raw_lines and len(raw_lines) <= 30:
+        detail("---")
+        for line in raw_lines:
+            detail(line)
+
+
+def _print_wappalyzer_block(fp: Fingerprint) -> None:
+    info("Wappalyzer")
+    if fp.wappalyzer_available:
+        detail("library: loaded")
+    else:
+        detail("library: not installed (header/cookie/html signatures only)")
+    if fp.server:
+        detail("Server: " + fp.server)
+    if fp.powered_by:
+        detail("X-Powered-By: " + fp.powered_by)
+    if fp.os_hints:
+        detail("OS hints: " + ", ".join(fp.os_hints))
+    if not fp.hits:
+        detail("(no technology signatures matched)")
+        return
+    for h in fp.hits:
+        ver = f" {h.version}" if h.version else ""
+        src = f"  [{h.source}]" if h.source else ""
+        detail(f"{h.name}{ver}  ({h.category}){src}")
+
+
+def _print_sitemap_block(sitemap: SitemapInfo | None) -> None:
+    info("sitemap.xml")
+    if not sitemap:
+        detail("(not fetched)")
+        return
+    if sitemap.requested:
+        for u in sitemap.requested:
+            detail("requested: " + u)
+    urls = list(sitemap.urls or [])
+    detail(f"entries: {len(urls)}")
+    if not urls:
+        detail("(none)")
+    else:
+        shown = urls[:SITEMAP_PRINT_CAP]
+        for u in shown:
+            detail(u)
+        extra = len(urls) - len(shown)
+        if extra > 0:
+            detail(f"… +{extra} more (see summary.md)")
+    if sitemap.errors:
+        for e in sitemap.errors:
+            detail("error: " + e)
 
 
 def _display_path(s: Surface) -> str:
@@ -501,6 +621,12 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
         + err_bit
     )
     info("Input surfaces: {byellow}" + str(len(surfaces) if filters else len(result.surfaces)) + "{rst}")
+    err_log = Path(result.output_dir) / "errors.log"
+    dbg_log = Path(result.output_dir) / "debug.log"
+    if n_err or result.errors:
+        info("Error log: {bgreen}" + str(err_log) + "{rst}")
+    if dbg_log.is_file():
+        info("Debug log: {bgreen}" + str(dbg_log) + "{rst}")
     info("{bright}Candidate classes:{rst}")
     if counts:
         for cls, n in sorted(counts.items(), key=lambda kv: (_priority(kv[0]), kv[0])):

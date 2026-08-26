@@ -34,6 +34,12 @@ class FilterFlagTests(unittest.TestCase):
         args = p.parse_args(["http://box.web", "--lfi", "--file-inclusion"])
         self.assertEqual(classes_from_args(args), ["file_inclusion"])
 
+    def test_debug_flag(self):
+        p = build_parser()
+        args = p.parse_args(["http://box.web", "--debug"])
+        self.assertTrue(args.debug)
+        self.assertFalse(p.parse_args(["http://box.web"]).debug)
+
 
 class CacheKeyTests(unittest.TestCase):
     def test_url_normalization(self):
@@ -50,6 +56,11 @@ class CacheKeyTests(unittest.TestCase):
         a = crawl_key(Config(start_url="http://box.web", max_pages=40))
         b = crawl_key(Config(start_url="http://box.web", max_pages=80))
         self.assertFalse(keys_match(a, b))
+
+    def test_debug_and_verbose_do_not_change_key(self):
+        a = crawl_key(Config(start_url="http://box.web", debug=True, verbose=True))
+        b = crawl_key(Config(start_url="http://box.web", debug=False, verbose=False))
+        self.assertTrue(keys_match(a, b))
 
 
 class CacheRoundtripTests(unittest.TestCase):
@@ -96,7 +107,7 @@ class CacheRoundtripTests(unittest.TestCase):
 class HelpTests(unittest.TestCase):
     def test_help_lists_filters_and_force(self):
         text = build_parser().format_help()
-        for flag in ("--sqli", "--xss", "--lfi", "--force-rescan", "--cmdi", "--verb-tampering"):
+        for flag in ("--sqli", "--xss", "--lfi", "--force-rescan", "--cmdi", "--verb-tampering", "--debug"):
             self.assertIn(flag, text)
 
 

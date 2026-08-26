@@ -77,8 +77,9 @@ class E2ETests(unittest.TestCase):
         )
         result = asyncio.run(run(cfg))
         out = Path(result.output_dir)
-        for name in ("summary.md", "crawl_map.md", "classified.md", "manual_checks.md", "inventory.json"):
+        for name in ("summary.md", "crawl_map.md", "classified.md", "manual_checks.md", "inventory.json", "errors.log"):
             self.assertTrue((out / name).is_file(), name)
+        self.assertFalse((out / "debug.log").is_file())
         params = {s.param: s.classes for s in result.surfaces}
         self.assertIn("file_inclusion", params.get("page", []), params)
         self.assertIn("xss", params.get("q", []), params)

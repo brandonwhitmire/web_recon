@@ -20,6 +20,7 @@ class Config:
     enqueue_sitemap: bool = True
     headless: bool = True
     force_rescan: bool = False
+    debug: bool = False
     class_filters: list[str] = field(default_factory=list)
 
 
