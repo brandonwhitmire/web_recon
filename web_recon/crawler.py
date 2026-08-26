@@ -1,13 +1,14 @@
-"""GET-only Playwright crawler.
+"""Passive Playwright crawler.
 
 Allowed network behavior:
   - page.goto (GET navigation) for in-scope HTML pages
-  - APIRequestContext.get for robots.txt and sitemap.xml
+  - APIRequestContext GET for robots.txt and sitemap.xml
+  - one OPTIONS on the start URL (Allow / CORS / DAV discovery)
   - the page's own subresource loads while rendering (not initiated as extra probes)
 
 Forbidden:
   - form submit, fill, click-to-navigate, type-into-fields
-  - POST/PUT/PATCH/DELETE initiated by this tool
+  - PUT/PATCH/DELETE/TRACE initiated by this tool
   - invoking sqlmap/nikto/ffuf/nuclei/lfimap or any other scanner
   - sending payloads or reflection probes
 """
@@ -33,7 +34,7 @@ from web_recon.extract import (
     parse_html,
 )
 from web_recon.fingerprint import fingerprint_page, merge_fingerprints
-from web_recon.models import Config, Fingerprint, Header, PageRecord, RobotsInfo, SitemapInfo
+from web_recon.models import Config, Fingerprint, Header, OptionsInfo, PageRecord, RobotsInfo, SitemapInfo
 from web_recon.scope import (
     crawl_identity,
     in_scope,
@@ -44,7 +45,7 @@ from web_recon.scope import (
     origin_of,
 )
 from web_recon.runlog import RunLog
-from web_recon.util import parse_robots, parse_sitemap_locs, sanitize_filename
+from web_recon.util import parse_allow_methods, parse_robots, parse_sitemap_locs, sanitize_filename
 
 DEFAULT_UA = (
     "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -66,6 +67,7 @@ class PassiveCrawler:
         self.fingerprints: list[Fingerprint] = []
         self.robots: RobotsInfo | None = None
         self.sitemap: SitemapInfo | None = None
+        self.options: OptionsInfo | None = None
         self.merged_fingerprint: Fingerprint = Fingerprint()
 
     def _err(self, msg: str, *, exc: BaseException | None = None) -> None:
@@ -108,6 +110,36 @@ class PassiveCrawler:
         parsed = parse_robots(body, url, status)
         self._dbg(f"robots.txt status={status} disallow={len(parsed.disallow)} sitemaps={len(parsed.sitemaps)}")
         return parsed
+
+    async def fetch_options(self, request_ctx, url: str) -> OptionsInfo:
+        """One OPTIONS on the start URL. Discovery only — no other verbs."""
+        self._dbg(f"OPTIONS {url}")
+        try:
+            kwargs = {
+                "method": "OPTIONS",
+                "timeout": self.config.timeout_ms,
+                "max_redirects": 5,
+                "fail_on_status_code": False,
+            }
+            try:
+                resp = await request_ctx.fetch(url, **kwargs)
+            except TypeError:
+                resp = await request_ctx.fetch(url, method="OPTIONS", timeout=self.config.timeout_ms)
+            headers = await _headers_from_playwright(resp)
+            allow_vals = [
+                h.value
+                for h in headers
+                if h.name.lower() in ("allow", "public", "access-control-allow-methods")
+            ]
+            allow = parse_allow_methods(*allow_vals)
+            status = resp.status
+            err = f"HTTP {status}" if status and status >= 500 else None
+            self._dbg(f"OPTIONS status={status} allow={allow}")
+            return OptionsInfo(url=url, fetched=True, status=status, headers=headers, allow=allow, error=err)
+        except Exception as exc:
+            self._dbg(f"OPTIONS {url} failed", exc=exc)
+            self._err(f"OPTIONS {url}: {exc}")
+            return OptionsInfo(url=url, fetched=False, error=str(exc))
 
     async def fetch_sitemaps(self, request_ctx, extra_sitemap_urls: list[str]) -> SitemapInfo:
         info = SitemapInfo()
@@ -320,6 +352,8 @@ class PassiveCrawler:
                     if cfg.delay_s:
                         await asyncio.sleep(cfg.delay_s)
 
+                opt_url = (pages[0].final_url if pages else None) or (self.origin + "/")
+                self.options = await self.fetch_options(context.request, opt_url)
                 self.robots = await self.fetch_robots(context.request)
                 extra_sitemaps = list(self.robots.sitemaps) if self.robots else []
                 self.sitemap = await self.fetch_sitemaps(context.request, extra_sitemaps)

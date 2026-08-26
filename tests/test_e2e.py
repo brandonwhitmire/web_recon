@@ -44,6 +44,13 @@ class E2ETests(unittest.TestCase):
             def log_message(self, fmt, *args):
                 return
 
+            def do_OPTIONS(self):
+                self.send_response(200)
+                self.send_header("Allow", "GET, HEAD, POST, OPTIONS")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Content-Length", "0")
+                self.end_headers()
+
         cls.httpd = socketserver.TCPServer(("127.0.0.1", 0), Handler)
         cls.port = cls.httpd.server_address[1]
         cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
@@ -93,6 +100,13 @@ class E2ETests(unittest.TestCase):
         self.assertIn("10.10.14.8", manual)
         summary = (out / "summary.md").read_text(encoding="utf-8")
         self.assertIn("/admin", summary)
+        self.assertIn("## HTTP OPTIONS (start URL)", summary)
+        self.assertIn("GET", summary)
+        self.assertIsNotNone(result.options)
+        self.assertTrue(result.options.fetched)
+        self.assertEqual(result.options.status, 200)
+        self.assertIn("GET", result.options.allow)
+        self.assertIn("OPTIONS", result.options.allow)
         page_surface = next(s for s in result.surfaces if s.param == "page")
         self.assertIn("file_inclusion", page_surface.classes)
         self.assertNotIn("xss", page_surface.classes)

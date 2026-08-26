@@ -45,6 +45,16 @@ class RobotsInfo:
 
 
 @dataclass
+class OptionsInfo:
+    url: str
+    fetched: bool
+    status: int | None = None
+    headers: list[Header] = field(default_factory=list)
+    allow: list[str] = field(default_factory=list)
+    error: str | None = None
+
+
+@dataclass
 class SitemapInfo:
     requested: list[str] = field(default_factory=list)
     urls: list[str] = field(default_factory=list)
@@ -140,6 +150,7 @@ class ReconResult:
     output_dir: str
     config: dict[str, Any] = field(default_factory=dict)
     start_headers: list[Header] = field(default_factory=list)
+    options: OptionsInfo | None = None
     robots: RobotsInfo | None = None
     sitemap: SitemapInfo | None = None
     fingerprint: Fingerprint = field(default_factory=Fingerprint)

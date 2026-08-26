@@ -1,4 +1,4 @@
-"""Orchestrate Phase 1–3. GET-only. Pastables are written to disk, never executed."""
+"""Orchestrate Phase 1–3. GET navigation + OPTIONS on start URL. Pastables are never executed."""
 
 from __future__ import annotations
 
@@ -36,6 +36,7 @@ def _maybe_reclassify(result: ReconResult, attacker_ip: str | None) -> ReconResu
         origin=result.origin,
         attacker_ip=attacker_ip,
         php_files=result.php_files,
+        options_allow=(result.options.allow if result.options else None),
     )
     result.class_counts = count_classes(result.surfaces)
     result.attacker_ip = attacker_ip
@@ -96,7 +97,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
     key = crawl_key(config)
 
     info("Target: {byellow}" + start + "{rst}")
-    info("Scope host: {byellow}" + scope_host + "{rst} (subdomains off, GET navigation only)")
+    info("Scope host: {byellow}" + scope_host + "{rst} (subdomains off, GET navigation + OPTIONS)")
     info("Output: {bgreen}" + str(out_dir) + "{rst}")
     if attacker_ip:
         info("Attacker IP (for pastable fill): {byellow}" + attacker_ip + "{rst}")
@@ -120,6 +121,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
                 cached.robots,
                 cached.fingerprint,
                 cached.sitemap,
+                options=cached.options,
                 from_cache=True,
             )
             print()
@@ -145,7 +147,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
     tree: LiveUrlTree | None = None
     print()
     info(
-        "{bblue}Phase 1 {green}(headers, robots.txt, Wappalyzer, sitemap){rst} "
+        "{bblue}Phase 1 {green}(headers, OPTIONS, robots.txt, Wappalyzer, sitemap){rst} "
         "running against {byellow}"
         + start
         + "{rst}"
@@ -160,6 +162,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
             crawler.robots,
             crawler.merged_fingerprint or Fingerprint(),
             crawler.sitemap,
+            options=crawler.options,
             include_banner=False,
         )
         print()
@@ -190,6 +193,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
         origin=origin,
         attacker_ip=attacker_ip,
         php_files=php_files,
+        options_allow=(crawler.options.allow if crawler.options else None),
     )
     counts = count_classes(surfaces)
 
@@ -206,6 +210,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
             "crawl": key,
         },
         start_headers=start_headers,
+        options=getattr(crawler, "options", None),
         robots=getattr(crawler, "robots", None),
         sitemap=getattr(crawler, "sitemap", None),
         fingerprint=getattr(crawler, "merged_fingerprint", None) or Fingerprint(),

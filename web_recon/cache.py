@@ -17,6 +17,7 @@ from web_recon.models import (
     FormField,
     FormRecord,
     Header,
+    OptionsInfo,
     PageRecord,
     ReconResult,
     RobotsInfo,
@@ -195,6 +196,10 @@ def result_from_inventory(data: dict[str, Any], output_dir: str) -> ReconResult:
     )
     robots = _take(RobotsInfo, data.get("robots")) if data.get("robots") else None
     sitemap = _take(SitemapInfo, data.get("sitemap")) if data.get("sitemap") else None
+    options = None
+    if data.get("options"):
+        raw_opt = data["options"]
+        options = _take(OptionsInfo, raw_opt, headers=_headers(raw_opt.get("headers") if isinstance(raw_opt, dict) else None))
     return ReconResult(
         target=str(data.get("target") or ""),
         start_url=str(data.get("start_url") or ""),
@@ -203,6 +208,7 @@ def result_from_inventory(data: dict[str, Any], output_dir: str) -> ReconResult:
         output_dir=output_dir,
         config=dict(data.get("config") or {}),
         start_headers=_headers(data.get("start_headers")),
+        options=options,
         robots=robots,
         sitemap=sitemap,
         fingerprint=fingerprint,

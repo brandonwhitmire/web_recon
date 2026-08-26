@@ -308,9 +308,22 @@ def classify_all(
     origin: str,
     attacker_ip: str | None,
     php_files: list[str],
+    options_allow: list[str] | None = None,
 ) -> list[Surface]:
     php_file = php_files[0] if php_files else None
     surfaces = build_surfaces(pages)
+    if options_allow:
+        methods = ", ".join(options_allow)
+        for s in surfaces:
+            if s.kind != "site":
+                continue
+            flags = set(s.context_flags)
+            flags.add("from_options_header")
+            s.context_flags = sorted(flags)
+            s.sample_value = methods
+            extra = f"OPTIONS Allow: {methods}"
+            if extra not in (s.evidence or ""):
+                s.evidence = ((s.evidence or "") + "; " + extra).strip("; ")
     out = [
         emit_surface(s, origin=origin, attacker_ip=attacker_ip, php_file=php_file)
         for s in surfaces

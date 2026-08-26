@@ -1,6 +1,6 @@
 # web-recon
 
-Passive web recon for authorized labs (OSCP prep). Renders the target, crawls same-host pages, inventories inputs, tags **candidate** vuln classes, and prints pastables. GET-only. Never submits forms, sends payloads, or runs scanners.
+Passive web recon for authorized labs (OSCP prep). Renders the target, crawls same-host pages, inventories inputs, tags **candidate** vuln classes, and prints pastables. GET navigation plus one OPTIONS on the start URL. Never submits forms, sends payloads, or runs scanners.
 
 ## Setup
 
@@ -26,7 +26,7 @@ python -m web_recon --help
 
 `--verbose` adds bypass ladders to `classified.md` and Phase 3 terminal output (they always land in `manual_checks.md`).
 
-`--debug` writes extra crawl/request detail to `debug.log`. Page, robots.txt, and sitemap failures always go to `errors.log`.
+`--debug` writes extra crawl/request detail to `debug.log`. Page, robots.txt, sitemap, and OPTIONS failures always go to `errors.log`.
 
 ### Cache and filters
 
@@ -46,7 +46,7 @@ Filters: `--sqli` `--xss` `--ssti` `--ssrf` `--xxe` `--lfi` / `--file-inclusion`
 
 ```
 results/<target>/
-  summary.md          headers, robots.txt, sitemap, tech fingerprint
+  summary.md          headers, OPTIONS, robots.txt, sitemap, tech fingerprint
   crawl_map.md        URLs, forms, params, comments
   classified.md       candidate classes (high → low) → pastables
   manual_checks.md    extra / verbose pastables

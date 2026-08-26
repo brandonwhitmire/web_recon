@@ -23,7 +23,7 @@ This tool is an enumeration and triage aid for authorized labs (OSCP prep).
 
 It NEVER:
   - submits forms, sends payloads, or probes reflection
-  - issues requests beyond GET navigation + robots.txt + sitemap.xml
+  - issues requests beyond GET navigation + OPTIONS (start URL) + robots.txt + sitemap.xml
   - runs sqlmap, nikto, nuclei, ffuf, lfimap, or any other scanner
 
 It PRINTS operator pastables. You copy and run them yourself.

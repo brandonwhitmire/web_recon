@@ -107,6 +107,25 @@ class SurfacePipelineTests(unittest.TestCase):
         self.assertLess(md.find("## xss"), md.find("## verb_tampering"))
         self.assertNotIn("## Surfaces", md)
 
+    def test_options_allow_annotates_site_surface(self):
+        page = PageRecord(
+            url="http://box.web/",
+            final_url="http://box.web/",
+            status=200,
+        )
+        surfaces = classify_all(
+            [page],
+            origin="http://box.web",
+            attacker_ip="1.2.3.4",
+            php_files=[],
+            options_allow=["GET", "PUT", "DELETE", "OPTIONS"],
+        )
+        site = next(s for s in surfaces if s.kind == "site")
+        self.assertIn("from_options_header", site.context_flags)
+        self.assertEqual(site.sample_value, "GET, PUT, DELETE, OPTIONS")
+        self.assertIn("OPTIONS Allow: GET, PUT, DELETE, OPTIONS", site.evidence)
+        self.assertIn("verb_tampering", site.classes)
+
 
 class SqliSurfaceTests(unittest.TestCase):
     def hit(self, **kwargs):

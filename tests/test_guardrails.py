@@ -8,7 +8,7 @@ if str(ROOT) not in sys.path:
 
 
 class GuardrailTests(unittest.TestCase):
-    """The crawler must stay GET-only and must not invoke scanners."""
+    """The crawler must not submit forms, send payloads, or invoke scanners."""
 
     def _src(self, name: str) -> str:
         return (ROOT / "web_recon" / name).read_text(encoding="utf-8")
@@ -20,6 +20,11 @@ class GuardrailTests(unittest.TestCase):
         # Docstring may name scanners as things we do NOT run; assert we never import/call them.
         self.assertNotIn("import sqlmap", src)
         self.assertNotIn("shutil.which", src)
+        # OPTIONS on the start URL is the only non-GET probe this tool initiates.
+        self.assertIn('method="OPTIONS"', src)
+        for verb in ("PUT", "PATCH", "DELETE", "TRACE"):
+            self.assertNotIn(f'method="{verb}"', src)
+            self.assertNotIn(f"method='{verb}'", src)
 
     def test_no_reflection_flag_set_by_crawler(self):
         combined = "".join(self._src(n) for n in ("crawler.py", "extract.py", "pipeline.py"))

@@ -199,3 +199,17 @@ def parse_sitemap_locs(xml_text: str) -> tuple[list[str], list[str]]:
     if root_name == "sitemapindex" and not nested and urls:
         nested, urls = urls, []
     return urls, nested
+
+
+def parse_allow_methods(*values: str) -> list[str]:
+    """Parse Allow / Access-Control-Allow-Methods into unique uppercase verbs."""
+    seen: set[str] = set()
+    out: list[str] = []
+    for val in values:
+        for part in (val or "").replace(";", ",").split(","):
+            method = part.strip().upper()
+            if not method or method in seen:
+                continue
+            seen.add(method)
+            out.append(method)
+    return out

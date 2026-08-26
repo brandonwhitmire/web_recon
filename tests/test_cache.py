@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 from web_recon.cache import crawl_key, keys_match, normalize_start_url, result_from_inventory, try_cache
 from web_recon.cli import build_parser
 from web_recon.filters import CLASS_KEYS, classes_from_args, flag_to_class
-from web_recon.models import Config
+from web_recon.models import Config, Header, OptionsInfo, ReconResult, Surface
 from web_recon.report import render_inventory
 
 
@@ -65,8 +65,6 @@ class CacheKeyTests(unittest.TestCase):
 
 class CacheRoundtripTests(unittest.TestCase):
     def test_try_cache_hit_and_miss(self):
-        from web_recon.models import ReconResult, Surface
-
         tmp = Path(tempfile.mkdtemp(prefix="web-recon-cache-"))
         cfg = Config(start_url="http://box.web", max_pages=80)
         result = ReconResult(
@@ -76,6 +74,13 @@ class CacheRoundtripTests(unittest.TestCase):
             slug="box.web",
             output_dir=str(tmp),
             config={"crawl": crawl_key(cfg)},
+            options=OptionsInfo(
+                url="http://box.web/",
+                fetched=True,
+                status=200,
+                allow=["GET", "HEAD", "OPTIONS"],
+                headers=[Header(name="Allow", value="GET, HEAD, OPTIONS")],
+            ),
             surfaces=[
                 Surface(
                     id="s1",
@@ -96,12 +101,29 @@ class CacheRoundtripTests(unittest.TestCase):
         self.assertIsNotNone(hit)
         self.assertEqual(hit.surfaces[0].param, "page")
         self.assertIn("file_inclusion", hit.surfaces[0].classes)
+        self.assertIsNotNone(hit.options)
+        self.assertEqual(hit.options.allow, ["GET", "HEAD", "OPTIONS"])
+        self.assertEqual(hit.options.headers[0].name, "Allow")
 
         miss = try_cache(tmp, crawl_key(Config(start_url="http://box.web", max_pages=10)))
         self.assertIsNone(miss)
 
         loaded = result_from_inventory(json.loads((tmp / "inventory.json").read_text()), str(tmp))
         self.assertEqual(loaded.config["crawl"]["max_pages"], 80)
+        self.assertEqual(loaded.options.allow, ["GET", "HEAD", "OPTIONS"])
+
+    def test_old_inventory_without_options_is_none(self):
+        loaded = result_from_inventory(
+            {
+                "target": "box.web",
+                "start_url": "http://box.web",
+                "origin": "http://box.web",
+                "slug": "box.web",
+                "surfaces": [],
+            },
+            "/tmp",
+        )
+        self.assertIsNone(loaded.options)
 
 
 class HelpTests(unittest.TestCase):

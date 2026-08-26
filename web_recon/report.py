@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from web_recon.classify import CLASS_PRIORITY, _priority
-from web_recon.models import Fingerprint, Header, ReconResult, RobotsInfo, SitemapInfo, Surface
+from web_recon.models import Fingerprint, Header, OptionsInfo, ReconResult, RobotsInfo, SitemapInfo, Surface
 from web_recon.term import detail, info
 
 SECURITY_HEADERS = [
@@ -28,6 +28,45 @@ SECURITY_HEADERS = [
 
 SITEMAP_PRINT_CAP = 40
 HEADER_VALUE_MAX = 240
+OPTIONS_HIGHLIGHT = (
+    "allow",
+    "public",
+    "dav",
+    "ms-author-via",
+    "access-control-allow-origin",
+    "access-control-allow-methods",
+    "access-control-allow-headers",
+    "access-control-allow-credentials",
+    "access-control-expose-headers",
+    "accept-patch",
+    "accept-post",
+)
+OPTIONS_SKIP = {
+    "date",
+    "connection",
+    "keep-alive",
+    "transfer-encoding",
+    "content-length",
+}
+UNUSUAL_METHODS = frozenset(
+    {
+        "PUT",
+        "DELETE",
+        "PATCH",
+        "TRACE",
+        "TRACK",
+        "CONNECT",
+        "DEBUG",
+        "PROPFIND",
+        "PROPPATCH",
+        "MKCOL",
+        "COPY",
+        "MOVE",
+        "LOCK",
+        "UNLOCK",
+        "SEARCH",
+    }
+)
 
 
 def print_phase1(
@@ -37,20 +76,22 @@ def print_phase1(
     fingerprint: Fingerprint,
     sitemap: SitemapInfo | None,
     *,
+    options: OptionsInfo | None = None,
     from_cache: bool = False,
     include_banner: bool = True,
 ) -> None:
-    """Terminal Phase 1: headers, robots.txt, Wappalyzer, sitemap (last)."""
+    """Terminal Phase 1: headers, OPTIONS, robots.txt, Wappalyzer, sitemap (last)."""
     if include_banner:
         extra = " {byellow}[from cache]{rst}" if from_cache else ""
         info(
-            "{bblue}Phase 1 {green}(headers, robots.txt, Wappalyzer, sitemap){rst} "
+            "{bblue}Phase 1 {green}(headers, OPTIONS, robots.txt, Wappalyzer, sitemap){rst} "
             "running against {byellow}"
             + start_url
             + "{rst}"
             + extra
         )
     _print_headers_block(headers)
+    _print_options_block(options)
     _print_robots_block(robots)
     _print_wappalyzer_block(fingerprint)
     _print_sitemap_block(sitemap)
@@ -70,6 +111,54 @@ def _print_headers_block(headers: list[Header]) -> None:
     missing = [n for n in SECURITY_HEADERS if n.lower() not in present]
     if missing:
         detail("missing security headers: " + ", ".join(missing))
+
+
+def _options_is_bare_error(options: OptionsInfo) -> bool:
+    """4xx/fail with no Allow and no CORS/DAV headers → one compact line."""
+    interesting = [h for h in options.headers if h.name.lower() in OPTIONS_HIGHLIGHT]
+    return (not options.fetched and bool(options.error)) or (
+        options.status is not None
+        and options.status >= 400
+        and not options.allow
+        and not interesting
+    )
+
+
+def _print_options_block(options: OptionsInfo | None) -> None:
+    info("HTTP OPTIONS")
+    if not options:
+        detail("not fetched")
+        return
+    if _options_is_bare_error(options):
+        detail(_short_fetch_error(options.error or f"HTTP {options.status}", options.url))
+        return
+    status = f"status={options.status}" if options.status is not None else "ok"
+    detail((options.url or "") + "  " + status)
+    if options.error and options.status and options.status >= 500:
+        detail(_short_fetch_error(options.error, options.url))
+    if options.allow:
+        detail("Allow: " + ", ".join(options.allow))
+        unusual = [m for m in options.allow if m in UNUSUAL_METHODS]
+        if unusual:
+            detail("interesting methods: " + ", ".join(unusual))
+    shown = {"allow"}
+    for h in options.headers:
+        key = h.name.lower()
+        if key == "allow" or key not in OPTIONS_HIGHLIGHT:
+            continue
+        val = h.value or ""
+        if len(val) > HEADER_VALUE_MAX:
+            val = val[:HEADER_VALUE_MAX] + "…"
+        detail(f"{h.name}: {val}")
+        shown.add(key)
+    for h in options.headers:
+        key = h.name.lower()
+        if key in shown or key in OPTIONS_SKIP:
+            continue
+        val = h.value or ""
+        if len(val) > HEADER_VALUE_MAX:
+            val = val[:HEADER_VALUE_MAX] + "…"
+        detail(f"{h.name}: {val}")
 
 
 def _short_fetch_error(err: str, url: str | None = None) -> str:
@@ -224,7 +313,7 @@ def render_summary(result: ReconResult) -> str:
     lines.append(f"- Start URL: `{result.start_url}`")
     lines.append(f"- Origin: `{result.origin}`")
     lines.append(f"- Generated: {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%SZ')}")
-    lines.append("- Mode: **passive** (GET navigation + robots.txt + sitemap.xml). No exploitation, no payload send.")
+    lines.append("- Mode: **passive** (GET navigation + OPTIONS on start URL + robots.txt + sitemap.xml). No exploitation, no payload send.")
     lines.append("")
     lines.append("## HTTP response headers (start page)")
     lines.append("")
@@ -254,6 +343,29 @@ def render_summary(result: ReconResult) -> str:
             lines.append(f"- `{item}`")
     else:
         lines.append("- None beyond the raw header dump above.")
+    lines.append("")
+    lines.append("## HTTP OPTIONS (start URL)")
+    lines.append("")
+    opt = result.options
+    if not opt:
+        lines.append("_Not fetched._")
+    elif _options_is_bare_error(opt):
+        lines.append(f"- {_short_fetch_error(opt.error or f'HTTP {opt.status}', opt.url)}")
+    else:
+        lines.append(f"- URL: `{opt.url}`")
+        lines.append(f"- Status: `{opt.status}`")
+        if opt.allow:
+            lines.append(f"- Allow: {', '.join(f'`{m}`' for m in opt.allow)}")
+            unusual = [m for m in opt.allow if m in UNUSUAL_METHODS]
+            if unusual:
+                lines.append(f"- Interesting methods: {', '.join(f'`{m}`' for m in unusual)}")
+        if opt.headers:
+            shown = [h for h in opt.headers if h.name.lower() not in OPTIONS_SKIP]
+            if shown:
+                lines.append("")
+                lines.append(fence("\n".join(f"{h.name}: {h.value}" for h in shown)))
+        elif not opt.allow:
+            lines.append("- _No Allow / CORS / DAV headers._")
     lines.append("")
     lines.append("## robots.txt")
     lines.append("")
@@ -614,7 +726,7 @@ def render_inventory(result: ReconResult) -> str:
             "mode": "passive",
             "exploitation": False,
             "confirmation": False,
-            "requests_allowed": "GET navigation, robots.txt, sitemap.xml, render subresources",
+            "requests_allowed": "GET navigation, OPTIONS on start URL, robots.txt, sitemap.xml, render subresources",
             "pastables": "emitted as text, never executed",
         },
         "target": result.target,
@@ -628,6 +740,7 @@ def render_inventory(result: ReconResult) -> str:
         "fingerprint": asdict(result.fingerprint),
         "robots": asdict(result.robots) if result.robots else None,
         "sitemap": asdict(result.sitemap) if result.sitemap else None,
+        "options": asdict(result.options) if result.options else None,
         "start_headers": [asdict(h) for h in result.start_headers],
         "pages": [asdict(p) for p in result.pages],
         "surfaces": [asdict(s) for s in result.surfaces],

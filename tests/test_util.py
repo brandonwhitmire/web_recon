@@ -10,6 +10,7 @@ if str(ROOT) not in sys.path:
 from web_recon.util import (
     detect_attacker_ip,
     host_port_from_target,
+    parse_allow_methods,
     source_ip_toward,
 )
 
@@ -66,6 +67,31 @@ class SourceIpTests(unittest.TestCase):
         with patch("web_recon.util.source_ip_toward", return_value=None):
             with patch("web_recon.util._iface_ipv4", side_effect=lambda iface: "10.10.14.8" if iface == "tun0" else None):
                 self.assertEqual(detect_attacker_ip("http://hostname.local/"), "10.10.14.8")
+
+
+class AllowMethodsTests(unittest.TestCase):
+    def test_empty(self):
+        self.assertEqual(parse_allow_methods(), [])
+        self.assertEqual(parse_allow_methods(""), [])
+        self.assertEqual(parse_allow_methods(None), [])  # type: ignore[arg-type]
+
+    def test_comma_list_unique_upper(self):
+        self.assertEqual(
+            parse_allow_methods("get, HEAD, post, OPTIONS"),
+            ["GET", "HEAD", "POST", "OPTIONS"],
+        )
+
+    def test_merges_allow_and_cors(self):
+        self.assertEqual(
+            parse_allow_methods("GET, POST", "GET, PUT, DELETE"),
+            ["GET", "POST", "PUT", "DELETE"],
+        )
+
+    def test_semicolon_and_dupes(self):
+        self.assertEqual(
+            parse_allow_methods("GET; PUT, GET"),
+            ["GET", "PUT"],
+        )
 
 
 if __name__ == "__main__":

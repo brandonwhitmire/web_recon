@@ -7,12 +7,12 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from web_recon.models import Fingerprint, Header, PageRecord, ReconResult, RobotsInfo, SitemapInfo, Surface, TechHit
+from web_recon.models import Fingerprint, Header, OptionsInfo, PageRecord, ReconResult, RobotsInfo, SitemapInfo, Surface, TechHit
 from web_recon.report import iter_class_groups, print_overview, print_phase1, print_phase3
 
 
 class Phase1PrintTests(unittest.TestCase):
-    def test_order_is_headers_robots_wappalyzer_sitemap(self):
+    def test_order_is_headers_options_robots_wappalyzer_sitemap(self):
         infos: list[str] = []
         details: list[str] = []
         with patch("web_recon.report.info", side_effect=lambda m: infos.append(m)):
@@ -35,14 +35,112 @@ class Phase1PrintTests(unittest.TestCase):
                         requested=["http://box.web/sitemap.xml"],
                         urls=["http://box.web/", "http://box.web/?p=1"],
                     ),
+                    options=OptionsInfo(
+                        url="http://box.web/",
+                        fetched=True,
+                        status=200,
+                        allow=["GET", "HEAD", "POST", "OPTIONS"],
+                        headers=[
+                            Header(name="Allow", value="GET, HEAD, POST, OPTIONS"),
+                            Header(name="Access-Control-Allow-Origin", value="*"),
+                        ],
+                    ),
                 )
         self.assertIn("Phase 1", infos[0])
-        self.assertEqual(infos[1:], ["HTTP headers", "robots.txt", "Wappalyzer", "sitemap.xml"])
+        self.assertEqual(
+            infos[1:],
+            ["HTTP headers", "HTTP OPTIONS", "robots.txt", "Wappalyzer", "sitemap.xml"],
+        )
         blob = "\n".join(details)
         self.assertIn("Server: nginx", blob)
+        self.assertIn("Allow: GET, HEAD, POST, OPTIONS", blob)
+        self.assertIn("Access-Control-Allow-Origin: *", blob)
         self.assertIn("Disallow: /admin", blob)
         self.assertIn("WordPress", blob)
         self.assertIn("http://box.web/?p=1", blob)
+
+    def test_options_highlights_unusual_methods(self):
+        details: list[str] = []
+        with patch("web_recon.report.info"):
+            with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
+                print_phase1(
+                    "http://box.web/",
+                    [],
+                    None,
+                    Fingerprint(wappalyzer_available=True),
+                    None,
+                    options=OptionsInfo(
+                        url="http://box.web/",
+                        fetched=True,
+                        status=200,
+                        allow=["GET", "PUT", "DELETE", "OPTIONS"],
+                        headers=[Header(name="Allow", value="GET, PUT, DELETE, OPTIONS")],
+                    ),
+                    include_banner=False,
+                )
+        blob = "\n".join(details)
+        self.assertIn("http://box.web/  status=200", blob)
+        self.assertIn("Allow: GET, PUT, DELETE, OPTIONS", blob)
+        self.assertIn("interesting methods: PUT, DELETE", blob)
+
+    def test_options_405_with_allow_is_not_one_liner(self):
+        details: list[str] = []
+        with patch("web_recon.report.info"):
+            with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
+                print_phase1(
+                    "http://box.web/",
+                    [],
+                    None,
+                    Fingerprint(wappalyzer_available=True),
+                    None,
+                    options=OptionsInfo(
+                        url="http://box.web/",
+                        fetched=True,
+                        status=405,
+                        allow=["GET", "HEAD", "OPTIONS"],
+                        headers=[Header(name="Allow", value="GET, HEAD, OPTIONS")],
+                    ),
+                    include_banner=False,
+                )
+        blob = "\n".join(details)
+        self.assertIn("status=405", blob)
+        self.assertIn("Allow: GET, HEAD, OPTIONS", blob)
+        self.assertNotIn("HTTP 405  http://box.web/", blob)
+
+    def test_options_404_is_one_line(self):
+        details: list[str] = []
+        with patch("web_recon.report.info"):
+            with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
+                print_phase1(
+                    "http://box.web/",
+                    [Header(name="Server", value="Apache")],
+                    RobotsInfo(
+                        url="http://box.web/robots.txt",
+                        fetched=True,
+                        status=404,
+                        raw="<!DOCTYPE HTML><html>404</html>",
+                        error="HTTP 404",
+                    ),
+                    Fingerprint(wappalyzer_available=True, hits=[TechHit(name="Apache", category="Web servers", source="wappalyzer")]),
+                    SitemapInfo(
+                        requested=["http://box.web/sitemap.xml"],
+                        urls=[],
+                        errors=["http://box.web/sitemap.xml: HTTP 404"],
+                    ),
+                    options=OptionsInfo(
+                        url="http://box.web/",
+                        fetched=True,
+                        status=404,
+                        error="HTTP 404",
+                        headers=[Header(name="Content-Type", value="text/html")],
+                    ),
+                    include_banner=False,
+                )
+        blob = "\n".join(details)
+        self.assertIn("HTTP 404  http://box.web/", blob)
+        self.assertTrue(any(d.strip() == "HTTP 404  http://box.web/" for d in details))
+        self.assertNotIn("DOCTYPE", blob)
+        self.assertNotIn("interesting methods", blob)
 
     def test_robots_and_sitemap_404_are_one_line(self):
         details: list[str] = []
@@ -100,10 +198,19 @@ class SummaryErrorTests(unittest.TestCase):
                     requested=["http://box.web/sitemap.xml"],
                     errors=["http://box.web/sitemap.xml: HTTP 404"],
                 ),
+                options=OptionsInfo(
+                    url="http://box.web/",
+                    fetched=True,
+                    status=404,
+                    error="HTTP 404",
+                    headers=[Header(name="Content-Type", value="text/html")],
+                ),
             )
         )
         self.assertIn("HTTP 404  http://box.web/robots.txt", md)
         self.assertIn("HTTP 404  http://box.web/sitemap.xml", md)
+        self.assertIn("HTTP OPTIONS (start URL)", md)
+        self.assertIn("HTTP 404  http://box.web/", md)
         self.assertNotIn("DOCTYPE", md)
         self.assertNotIn("Disallow", md)
         self.assertNotIn("### Raw", md)
