@@ -6,8 +6,8 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from web_recon.fingerprint import fingerprint_page
-from web_recon.models import Header
+from web_recon.fingerprint import fingerprint_page, refresh_fingerprint
+from web_recon.models import Header, PageRecord
 
 
 class FingerprintTests(unittest.TestCase):
@@ -43,6 +43,34 @@ class FingerprintTests(unittest.TestCase):
         )
         self.assertTrue(fp.wappalyzer_available)
         self.assertTrue(any(h.source == "wappalyzer" for h in fp.hits))
+
+    def test_refresh_fingerprint_from_saved_dom(self):
+        import tempfile
+
+        tmp = Path(tempfile.mkdtemp(prefix="web_recon-fp-"))
+        dom = tmp / "index.html"
+        dom.write_text(
+            '<html><head><meta name="generator" content="WordPress 6.4">'
+            '<script src="/js/jquery.min.js"></script></head>'
+            '<body class="wp-content">x</body></html>',
+            encoding="utf-8",
+        )
+        page = PageRecord(
+            url="http://box.web/",
+            final_url="http://box.web/",
+            status=200,
+            headers=[Header(name="Server", value="Apache/2.4.49 (Unix)")],
+            dom_path=str(dom),
+        )
+        fp = refresh_fingerprint([page], fallback=None)
+        names = " ".join(h.name for h in fp.hits)
+        self.assertIn("HTTP Server", names)
+        self.assertIn("jQuery", names)
+        from web_recon.fingerprint import _HAS_WAPPALYZER
+
+        if _HAS_WAPPALYZER:
+            self.assertTrue(fp.wappalyzer_available)
+            self.assertTrue(any(h.source == "wappalyzer" for h in fp.hits))
 
 
 if __name__ == "__main__":

@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 from web_recon.cache import crawl_key, inventory_path, load_inventory, try_cache
 from web_recon.classify import classify_all, count_classes
 from web_recon.crawler import PassiveCrawler, php_files_from_pages
+from web_recon.fingerprint import _wappalyzer, refresh_fingerprint, wappalyzer_error
 from web_recon.models import Config, Fingerprint, ReconResult
 from web_recon.report import print_overview, print_phase1, print_phase3, write_all
 from web_recon.runlog import RunLog
@@ -41,6 +42,15 @@ def _maybe_reclassify(result: ReconResult, attacker_ip: str | None) -> ReconResu
     result.class_counts = count_classes(result.surfaces)
     result.attacker_ip = attacker_ip
     return result
+
+
+def _note_wappalyzer(runlog: RunLog) -> None:
+    from web_recon.fingerprint import _HAS_WAPPALYZER
+
+    _wappalyzer()
+    err = wappalyzer_error()
+    if err and _HAS_WAPPALYZER:
+        runlog.error("Wappalyzer: " + err)
 
 
 def _ingest_cached_errors(runlog: RunLog, result: ReconResult) -> None:
@@ -106,12 +116,14 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
     if config.debug:
         info("Debug log: {bgreen}" + str(runlog.debug_path) + "{rst}")
     runlog.debug(f"start={start} scope={scope_host} attacker_ip={attacker_ip} debug={config.debug}")
+    _note_wappalyzer(runlog)
 
     if not config.force_rescan:
         cached = try_cache(out_dir, key)
         if cached:
             runlog.debug("cache hit")
             cached = _maybe_reclassify(cached, attacker_ip)
+            cached.fingerprint = refresh_fingerprint(cached.pages, fallback=cached.fingerprint)
             _ingest_cached_errors(runlog, cached)
             runlog.write_errors()
             print()

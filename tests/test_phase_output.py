@@ -182,6 +182,22 @@ class Phase1PrintTests(unittest.TestCase):
         self.assertNotIn("not installed", blob)
         self.assertIn("Apache", blob)
 
+    def test_wappalyzer_missing_shows_install_hint(self):
+        details: list[str] = []
+        with patch("web_recon.report.info"):
+            with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
+                print_phase1(
+                    "http://box.web/",
+                    [Header(name="Server", value="Apache")],
+                    None,
+                    Fingerprint(wappalyzer_available=False, hits=[TechHit(name="HTTP Server", category="Web server", source="header")]),
+                    None,
+                    include_banner=False,
+                )
+        blob = "\n".join(details)
+        self.assertTrue(any("not installed" in d or "failed to load" in d for d in details), blob)
+        self.assertIn("HTTP Server", blob)
+
 
 class SummaryErrorTests(unittest.TestCase):
     def test_summary_omits_404_html(self):

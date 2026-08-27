@@ -140,9 +140,11 @@ def _looks_like_html(text: str | None) -> bool:
 
 
 def _print_wappalyzer_block(fp: Fingerprint) -> None:
+    from web_recon.fingerprint import wappalyzer_error
+
     info("Wappalyzer")
     if not fp.wappalyzer_available:
-        detail("not installed — pip install -r requirements.txt")
+        detail(wappalyzer_error() or "not installed — pip install wappalyzer-python3")
     if fp.server:
         detail("Server: " + fp.server)
     if fp.powered_by:

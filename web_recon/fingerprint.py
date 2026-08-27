@@ -10,15 +10,20 @@ from __future__ import annotations
 import re
 import warnings
 from collections.abc import Iterable, Mapping
+from pathlib import Path
 
-from web_recon.models import Fingerprint, Header, TechHit
+from web_recon.models import Fingerprint, Header, PageRecord, TechHit
+
+_WAPP_IMPORT_ERROR: str | None = None
+_WAPP_LOAD_ERROR: str | None = None
 
 try:
     from Wappalyzer import Wappalyzer, WebPage
 
     _HAS_WAPPALYZER = True
-except Exception:
+except Exception as exc:
     _HAS_WAPPALYZER = False
+    _WAPP_IMPORT_ERROR = f"{type(exc).__name__}: {exc}"
     Wappalyzer = None  # type: ignore
     WebPage = None  # type: ignore
 
@@ -101,16 +106,67 @@ SCRIPT_SIGS: list[tuple[re.Pattern[str], str, str]] = [
 ]
 
 
-def _wappalyzer() -> object | None:
-    global _WAPP_INSTANCE
+def wappalyzer_error() -> str | None:
+    """Human-readable reason the engine is unavailable, or None if it loaded."""
+    if _WAPP_LOAD_ERROR:
+        return f"installed but failed to load fingerprints ({_WAPP_LOAD_ERROR})"
+    if _WAPP_IMPORT_ERROR:
+        return f"not installed — pip install wappalyzer-python3 ({_WAPP_IMPORT_ERROR})"
     if not _HAS_WAPPALYZER:
+        return "not installed — pip install wappalyzer-python3"
+    return None
+
+
+def _wappalyzer() -> object | None:
+    global _WAPP_INSTANCE, _WAPP_LOAD_ERROR
+    if not _HAS_WAPPALYZER:
+        return None
+    if _WAPP_INSTANCE is False:
         return None
     if _WAPP_INSTANCE is None:
         try:
-            _WAPP_INSTANCE = Wappalyzer.latest(update=False)
-        except Exception:
+            try:
+                _WAPP_INSTANCE = Wappalyzer.latest(update=False)
+            except TypeError:
+                _WAPP_INSTANCE = Wappalyzer.latest()
+        except Exception as exc:
+            _WAPP_LOAD_ERROR = f"{type(exc).__name__}: {exc}"
             _WAPP_INSTANCE = False
     return _WAPP_INSTANCE or None
+
+
+def refresh_fingerprint(pages: list[PageRecord], fallback: Fingerprint | None = None) -> Fingerprint:
+    """Re-run local + Wappalyzer fingerprints from cached page headers and saved DOM.
+
+    Cache hits must not keep a stale `wappalyzer_available=False` from a previous
+    environment where the library was missing.
+    """
+    parts: list[Fingerprint] = []
+    for page in pages or []:
+        html = ""
+        if page.dom_path:
+            try:
+                html = Path(page.dom_path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                html = ""
+        parts.append(
+            fingerprint_page(
+                page.final_url or page.url,
+                html,
+                page.headers,
+                page.cookies,
+            )
+        )
+    if parts:
+        return merge_fingerprints(parts)
+    base = fallback or Fingerprint()
+    return Fingerprint(
+        hits=list(base.hits),
+        os_hints=list(base.os_hints),
+        server=base.server,
+        powered_by=base.powered_by,
+        wappalyzer_available=bool(_wappalyzer()),
+    )
 
 
 def headers_to_dict(headers: Iterable[Header] | Mapping[str, str]) -> dict[str, str]:

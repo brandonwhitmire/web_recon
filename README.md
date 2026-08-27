@@ -1,19 +1,21 @@
 # web_recon
 
+**NOTE:** 100% vibe-coded with AI... use at your own risk
+
 Passive web recon for authorized labs (OSCP prep). Renders the target, crawls same-host pages, inventories inputs, tags **candidate** vuln classes, and prints pastables. GET navigation plus one OPTIONS on the start URL. Never submits forms, sends payloads, or runs scanners.
 
 ## Setup
 
 Python 3.10+. After install, Chromium is still required (`playwright` does not bundle browsers in the wheel).
 
-### From GitHub
+### Python Wheel from Github
 
 ```bash
-npm init -y
-npm install playwright
-npx playwright install chromium
-playwright install chromium
-git clone https://github.com/brandonwhitmire/web_recon.git && cd web_recon
+pip install --break-system-packages --upgrade playwright
+python3 -m playwright install chromium
+python3 -m playwright install-deps chromium
+pipx ensurepath
+pipx install git+https://github.com/brandonwhitmire/web_recon.git
 ```
 
 That installs whatever is currently on `main` (no version pin). Re-run with `--upgrade` to pick up later commits.
