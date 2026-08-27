@@ -9,9 +9,11 @@ Python 3.10+. After install, Chromium is still required (`playwright` does not b
 ### From GitHub
 
 ```bash
-sudo apt install -y playwright
+npm init -y
+npm install playwright
+npx playwright install chromium
 playwright install chromium
-pipx install git+https://github.com/brandonwhitmire/web_recon.git
+git clone https://github.com/brandonwhitmire/web_recon.git && cd web_recon
 ```
 
 That installs whatever is currently on `main` (no version pin). Re-run with `--upgrade` to pick up later commits.
@@ -30,10 +32,10 @@ Editable (development): `pip install -e .`
 ## Usage
 
 ```bash
-web-recon http://10.10.11.12
-web-recon http://target.web --verbose --attacker-ip 10.10.14.8
-web-recon https://app.lab -o /tmp --max-pages 40
-web-recon --help
+web_recon http://10.10.11.12
+web_recon http://target.web --verbose --attacker-ip 10.10.14.8
+web_recon https://app.lab -o /tmp --max-pages 40
+web_recon --help
 ```
 
 `python -m web_recon` is the same command.
@@ -49,11 +51,11 @@ web-recon --help
 A crawl is reused when the target and crawl options match (flag order does not matter). Classifier flags only filter what gets printed.
 
 ```bash
-web-recon http://10.10.11.12
-web-recon http://10.10.11.12 --sqli
-web-recon http://10.10.11.12 --xss --ssti
-web-recon http://10.10.11.12 --lfi
-web-recon http://10.10.11.12 --force-rescan
+web_recon http://10.10.11.12
+web_recon http://10.10.11.12 --sqli
+web_recon http://10.10.11.12 --xss --ssti
+web_recon http://10.10.11.12 --lfi
+web_recon http://10.10.11.12 --force-rescan
 ```
 
 Filters: `--sqli` `--xss` `--ssti` `--ssrf` `--xxe` `--lfi` / `--file-inclusion` `--cmdi` / `--command-injection` `--file-upload` `--idor` `--verb-tampering`.

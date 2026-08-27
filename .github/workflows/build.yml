@@ -27,7 +27,7 @@ jobs:
       - name: Install wheel and smoke-test CLI
         run: |
           python -m pip install dist/*.whl
-          web-recon --help
+          web_recon --help
           python -m web_recon --help
 
       - uses: actions/upload-artifact@v4

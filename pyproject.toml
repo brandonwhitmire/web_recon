@@ -3,7 +3,7 @@ requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "web-recon"
+name = "web_recon"
 version = "0.1.0"
 description = "Passive web recon and vuln-surface classifier for authorized OSCP-style labs."
 readme = "README.md"
@@ -34,7 +34,7 @@ Repository = "https://github.com/brandonwhitmire/web_recon"
 Issues = "https://github.com/brandonwhitmire/web_recon/issues"
 
 [project.scripts]
-web-recon = "web_recon.cli:main"
+web_recon = "web_recon.cli:main"
 
 [tool.setuptools]
 py-modules = ["web_recon_heuristics"]

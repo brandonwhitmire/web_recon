@@ -31,7 +31,7 @@ class RunLog:
         self._debug_fh = None
         if self.debug_enabled:
             self._debug_fh = self.debug_path.open("w", encoding="utf-8")
-            self._debug_fh.write(f"# web-recon debug.log\n# target: {target}\n# started: {_ts()}\n\n")
+            self._debug_fh.write(f"# web_recon debug.log\n# target: {target}\n# started: {_ts()}\n\n")
             self._debug_fh.flush()
 
     def error(self, msg: str, *, exc: BaseException | None = None) -> None:
@@ -55,7 +55,7 @@ class RunLog:
 
     def write_errors(self) -> Path:
         body = [
-            "# web-recon errors.log",
+            "# web_recon errors.log",
             f"# target: {self.target}",
             f"# generated: {_ts()}",
             "",

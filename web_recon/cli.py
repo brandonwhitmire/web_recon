@@ -1,7 +1,7 @@
 """CLI for the passive web recon classifier.
 
 Install:  pip install git+https://github.com/brandonwhitmire/web_recon.git && playwright install chromium
-Run:      web-recon http://TARGET
+Run:      web_recon http://TARGET
 """
 
 from __future__ import annotations
@@ -34,20 +34,20 @@ Cache:
   Use --force-rescan to ignore the cache.
 
 Examples:
-  web-recon http://10.10.11.12
-  web-recon http://10.10.11.12 --sqli
-  web-recon http://10.10.11.12 --xss --ssti
-  web-recon http://10.10.11.12 --lfi --verbose
-  web-recon http://10.10.11.12 --force-rescan
-  web-recon http://target.web --verbose --attacker-ip 10.10.14.8
-  web-recon https://app.lab -o /tmp --max-pages 40
-  web-recon http://target.web --debug
+  web_recon http://10.10.11.12
+  web_recon http://10.10.11.12 --sqli
+  web_recon http://10.10.11.12 --xss --ssti
+  web_recon http://10.10.11.12 --lfi --verbose
+  web_recon http://10.10.11.12 --force-rescan
+  web_recon http://target.web --verbose --attacker-ip 10.10.14.8
+  web_recon https://app.lab -o /tmp --max-pages 40
+  web_recon http://target.web --debug
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        prog="web-recon",
+        prog="web_recon",
         description="Passive web recon & vuln-surface classifier (OSCP-safe).",
         epilog=EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -80,7 +80,7 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Write debug.log with crawl/request detail (errors always go to errors.log)",
     )
-    p.add_argument("--version", action="version", version=f"web-recon {__version__}")
+    p.add_argument("--version", action="version", version=f"web_recon {__version__}")
 
     filt = p.add_argument_group(
         "classifier filters",
