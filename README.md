@@ -9,8 +9,9 @@ Python 3.10+. After install, Chromium is still required (`playwright` does not b
 ### From GitHub
 
 ```bash
-pip install git+https://github.com/brandonwhitmire/web_recon.git
+sudo apt install -y playwright
 playwright install chromium
+pipx install git+https://github.com/brandonwhitmire/web_recon.git
 ```
 
 That installs whatever is currently on `main` (no version pin). Re-run with `--upgrade` to pick up later commits.
