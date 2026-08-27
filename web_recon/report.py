@@ -453,6 +453,15 @@ def render_crawl_map(result: ReconResult) -> str:
     return "\n".join(lines)
 
 
+# Nameless text/textarea controls (no name/id). Low-signal XSS noise: keep in
+# classified.md / inventory, omit from the Phase 3 terminal dump.
+_UNNAMED_FREE_TEXT_PARAMS = frozenset({"(unnamed_text)", "(unnamed_textarea)"})
+
+
+def is_unnamed_free_text(s: Surface) -> bool:
+    return (s.param or "").strip().lower() in _UNNAMED_FREE_TEXT_PARAMS
+
+
 def iter_class_groups(
     result: ReconResult,
     class_filters: list[str] | None = None,
@@ -695,22 +704,37 @@ def print_phase3(
             info("No candidate classes.")
         print()
         return
+    omitted: set[str] = set()
     for cls, hits in groups:
-        info("{bmagenta}" + cls + "{rst}: {byellow}" + str(len(hits)) + "{rst}")
+        shown: list[Surface] = []
+        for s in hits:
+            if is_unnamed_free_text(s):
+                omitted.add(s.id)
+            else:
+                shown.append(s)
+        if not shown:
+            continue
+        info("{bmagenta}" + cls + "{rst}: {byellow}" + str(len(shown)) + "{rst}")
         if cls == "sqli":
             for label in ("HIGH", "MEDIUM"):
-                group = [s for s in hits if s.sqli_priority == label]
+                group = [s for s in shown if s.sqli_priority == label]
                 if not group:
                     continue
                 info("{byellow}" + label + "{rst} (" + str(len(group)) + ")")
                 for s in group:
                     _print_surface_hit(s, cls, verbose)
-            leftover = [s for s in hits if s.sqli_priority not in {"HIGH", "MEDIUM"}]
+            leftover = [s for s in shown if s.sqli_priority not in {"HIGH", "MEDIUM"}]
             for s in leftover:
                 _print_surface_hit(s, cls, verbose)
         else:
-            for s in hits:
+            for s in shown:
                 _print_surface_hit(s, cls, verbose)
+    if omitted:
+        info(
+            "{byellow}"
+            + str(len(omitted))
+            + "{rst} unnamed text/textarea surface(s) omitted — see classified.md"
+        )
     print()
 
 
@@ -749,8 +773,9 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
     surfaces = result.surfaces
     if filters:
         surfaces = [s for s in surfaces if any(c in filters for c in s.classes)]
+    terminal_surfaces = [s for s in surfaces if not is_unnamed_free_text(s)]
     counts = {}
-    for s in surfaces:
+    for s in terminal_surfaces:
         for c in s.classes:
             if filters and c not in filters:
                 continue
@@ -774,7 +799,7 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
         + "{rst}  errors="
         + err_bit
     )
-    info("Input surfaces: {byellow}" + str(len(surfaces) if filters else len(result.surfaces)) + "{rst}")
+    info("Input surfaces: {byellow}" + str(len(terminal_surfaces)) + "{rst}")
     err_log = Path(result.output_dir) / "errors.log"
     dbg_log = Path(result.output_dir) / "debug.log"
     if n_err or result.errors:
@@ -787,7 +812,7 @@ def print_overview(result: ReconResult, class_filters: list[str] | None = None, 
             info("  {bmagenta}" + cls + "{rst}: {byellow}" + str(n) + "{rst}")
     else:
         info("  (none)")
-    sqli_s = [s for s in surfaces if "sqli" in s.classes]
+    sqli_s = [s for s in terminal_surfaces if "sqli" in s.classes]
     if (not filters or "sqli" in filters) and sqli_s:
         n_high = sum(1 for s in sqli_s if s.sqli_priority == "HIGH")
         n_med = sum(1 for s in sqli_s if s.sqli_priority == "MEDIUM")

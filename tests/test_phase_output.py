@@ -320,6 +320,62 @@ class Phase3ClassifyTests(unittest.TestCase):
         self.assertLess(med, xss_hdr)
         self.assertLess(xss_hdr, iov)
 
+    def test_unnamed_text_omitted_from_terminal_kept_in_classified(self):
+        from web_recon.report import render_classified
+
+        self.result.surfaces.extend(
+            [
+                _surf(
+                    id="unnamed-text",
+                    param="(unnamed_text)",
+                    kind="form_field",
+                    method="GET",
+                    page_path="",
+                    classes=["xss"],
+                    why={"xss": "free-text/search input"},
+                    canonical={"xss": ["<script>alert(window.origin)</script>"]},
+                ),
+                _surf(
+                    id="unnamed-ta",
+                    param="(unnamed_textarea)",
+                    kind="form_field",
+                    method="GET",
+                    page_path="contact_us.html",
+                    classes=["xss"],
+                    why={"xss": "free-text/search input"},
+                    canonical={"xss": ["<svg/onload=alert(window.origin)>"]},
+                ),
+                _surf(
+                    id="named",
+                    param="name",
+                    kind="form_field",
+                    method="GET",
+                    page_path="contact_us.html",
+                    classes=["xss"],
+                    why={"xss": "free-text/search input"},
+                    canonical={"xss": ["<script>alert(window.origin)</script>"]},
+                ),
+            ]
+        )
+        infos: list[str] = []
+        printed: list[str] = []
+        with patch("web_recon.report.info", side_effect=lambda m: infos.append(m)):
+            with patch("builtins.print", side_effect=lambda *a, **k: printed.append(" ".join(str(x) for x in a))):
+                print_phase3(self.result, verbose=False)
+                print_overview(self.result)
+        blob = "\n".join(infos + printed)
+        self.assertNotIn("(unnamed_text)", blob)
+        self.assertNotIn("(unnamed_textarea)", blob)
+        self.assertIn("param={bgreen}name{rst}", blob)
+        self.assertTrue(any("unnamed text/textarea" in m and "classified.md" in m for m in infos))
+        xss_hdr = next(m for m in infos if m.startswith("{bmagenta}xss"))
+        self.assertEqual(xss_hdr, "{bmagenta}xss{rst}: {byellow}2{rst}")
+        self.assertTrue(any("2{rst} unnamed text/textarea" in m for m in infos))
+        md = render_classified(self.result, include_verbose=False)
+        self.assertIn("`(unnamed_text)`", md)
+        self.assertIn("`(unnamed_textarea)`", md)
+        self.assertIn("`name`", md)
+
 
 if __name__ == "__main__":
     unittest.main()
