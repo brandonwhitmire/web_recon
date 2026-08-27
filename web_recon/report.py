@@ -28,45 +28,6 @@ SECURITY_HEADERS = [
 
 SITEMAP_PRINT_CAP = 40
 HEADER_VALUE_MAX = 240
-OPTIONS_HIGHLIGHT = (
-    "allow",
-    "public",
-    "dav",
-    "ms-author-via",
-    "access-control-allow-origin",
-    "access-control-allow-methods",
-    "access-control-allow-headers",
-    "access-control-allow-credentials",
-    "access-control-expose-headers",
-    "accept-patch",
-    "accept-post",
-)
-OPTIONS_SKIP = {
-    "date",
-    "connection",
-    "keep-alive",
-    "transfer-encoding",
-    "content-length",
-}
-UNUSUAL_METHODS = frozenset(
-    {
-        "PUT",
-        "DELETE",
-        "PATCH",
-        "TRACE",
-        "TRACK",
-        "CONNECT",
-        "DEBUG",
-        "PROPFIND",
-        "PROPPATCH",
-        "MKCOL",
-        "COPY",
-        "MOVE",
-        "LOCK",
-        "UNLOCK",
-        "SEARCH",
-    }
-)
 
 
 def print_phase1(
@@ -113,52 +74,19 @@ def _print_headers_block(headers: list[Header]) -> None:
         detail("missing security headers: " + ", ".join(missing))
 
 
-def _options_is_bare_error(options: OptionsInfo) -> bool:
-    """4xx/fail with no Allow and no CORS/DAV headers → one compact line."""
-    interesting = [h for h in options.headers if h.name.lower() in OPTIONS_HIGHLIGHT]
-    return (not options.fetched and bool(options.error)) or (
-        options.status is not None
-        and options.status >= 400
-        and not options.allow
-        and not interesting
-    )
-
-
 def _print_options_block(options: OptionsInfo | None) -> None:
+    """Print only the HTTP verbs the server advertised (Allow / CORS methods)."""
     info("HTTP OPTIONS")
     if not options:
         detail("not fetched")
         return
-    if _options_is_bare_error(options):
-        detail(_short_fetch_error(options.error or f"HTTP {options.status}", options.url))
-        return
-    status = f"status={options.status}" if options.status is not None else "ok"
-    detail((options.url or "") + "  " + status)
-    if options.error and options.status and options.status >= 500:
+    if not options.fetched and options.error:
         detail(_short_fetch_error(options.error, options.url))
+        return
     if options.allow:
-        detail("Allow: " + ", ".join(options.allow))
-        unusual = [m for m in options.allow if m in UNUSUAL_METHODS]
-        if unusual:
-            detail("interesting methods: " + ", ".join(unusual))
-    shown = {"allow"}
-    for h in options.headers:
-        key = h.name.lower()
-        if key == "allow" or key not in OPTIONS_HIGHLIGHT:
-            continue
-        val = h.value or ""
-        if len(val) > HEADER_VALUE_MAX:
-            val = val[:HEADER_VALUE_MAX] + "…"
-        detail(f"{h.name}: {val}")
-        shown.add(key)
-    for h in options.headers:
-        key = h.name.lower()
-        if key in shown or key in OPTIONS_SKIP:
-            continue
-        val = h.value or ""
-        if len(val) > HEADER_VALUE_MAX:
-            val = val[:HEADER_VALUE_MAX] + "…"
-        detail(f"{h.name}: {val}")
+        detail(", ".join(options.allow))
+        return
+    detail("(none advertised)")
 
 
 def _short_fetch_error(err: str, url: str | None = None) -> str:
@@ -349,23 +277,12 @@ def render_summary(result: ReconResult) -> str:
     opt = result.options
     if not opt:
         lines.append("_Not fetched._")
-    elif _options_is_bare_error(opt):
-        lines.append(f"- {_short_fetch_error(opt.error or f'HTTP {opt.status}', opt.url)}")
+    elif not opt.fetched and opt.error:
+        lines.append(f"- {_short_fetch_error(opt.error, opt.url)}")
+    elif opt.allow:
+        lines.append(", ".join(f"`{m}`" for m in opt.allow))
     else:
-        lines.append(f"- URL: `{opt.url}`")
-        lines.append(f"- Status: `{opt.status}`")
-        if opt.allow:
-            lines.append(f"- Allow: {', '.join(f'`{m}`' for m in opt.allow)}")
-            unusual = [m for m in opt.allow if m in UNUSUAL_METHODS]
-            if unusual:
-                lines.append(f"- Interesting methods: {', '.join(f'`{m}`' for m in unusual)}")
-        if opt.headers:
-            shown = [h for h in opt.headers if h.name.lower() not in OPTIONS_SKIP]
-            if shown:
-                lines.append("")
-                lines.append(fence("\n".join(f"{h.name}: {h.value}" for h in shown)))
-        elif not opt.allow:
-            lines.append("- _No Allow / CORS / DAV headers._")
+        lines.append("_None advertised._")
     lines.append("")
     lines.append("## robots.txt")
     lines.append("")

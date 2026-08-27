@@ -1,7 +1,7 @@
 """CLI for the passive web recon classifier.
 
-Install:  pip install -r requirements.txt && playwright install chromium
-Run:      python -m web_recon http://TARGET
+Install:  pip install git+https://github.com/brandonwhitmire/web_recon.git && playwright install chromium
+Run:      web-recon http://TARGET
 """
 
 from __future__ import annotations
@@ -34,14 +34,14 @@ Cache:
   Use --force-rescan to ignore the cache.
 
 Examples:
-  python -m web_recon http://10.10.11.12
-  python -m web_recon http://10.10.11.12 --sqli
-  python -m web_recon http://10.10.11.12 --xss --ssti
-  python -m web_recon http://10.10.11.12 --lfi --verbose
-  python -m web_recon http://10.10.11.12 --force-rescan
-  python -m web_recon http://target.web --verbose --attacker-ip 10.10.14.8
-  python -m web_recon https://app.lab -o /tmp --max-pages 40
-  python -m web_recon http://target.web --debug
+  web-recon http://10.10.11.12
+  web-recon http://10.10.11.12 --sqli
+  web-recon http://10.10.11.12 --xss --ssti
+  web-recon http://10.10.11.12 --lfi --verbose
+  web-recon http://10.10.11.12 --force-rescan
+  web-recon http://target.web --verbose --attacker-ip 10.10.14.8
+  web-recon https://app.lab -o /tmp --max-pages 40
+  web-recon http://target.web --debug
 """
 
 

@@ -53,13 +53,14 @@ class Phase1PrintTests(unittest.TestCase):
         )
         blob = "\n".join(details)
         self.assertIn("Server: nginx", blob)
-        self.assertIn("Allow: GET, HEAD, POST, OPTIONS", blob)
-        self.assertIn("Access-Control-Allow-Origin: *", blob)
+        self.assertIn("GET, HEAD, POST, OPTIONS", blob)
+        self.assertNotIn("Access-Control-Allow-Origin", blob)
+        self.assertNotIn("Allow: GET", blob)
         self.assertIn("Disallow: /admin", blob)
         self.assertIn("WordPress", blob)
         self.assertIn("http://box.web/?p=1", blob)
 
-    def test_options_highlights_unusual_methods(self):
+    def test_options_prints_verbs_only(self):
         details: list[str] = []
         with patch("web_recon.report.info"):
             with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
@@ -74,16 +75,23 @@ class Phase1PrintTests(unittest.TestCase):
                         fetched=True,
                         status=200,
                         allow=["GET", "PUT", "DELETE", "OPTIONS"],
-                        headers=[Header(name="Allow", value="GET, PUT, DELETE, OPTIONS")],
+                        headers=[
+                            Header(name="Allow", value="GET, PUT, DELETE, OPTIONS"),
+                            Header(name="Access-Control-Allow-Origin", value="*"),
+                            Header(name="Server", value="nginx"),
+                        ],
                     ),
                     include_banner=False,
                 )
         blob = "\n".join(details)
-        self.assertIn("http://box.web/  status=200", blob)
-        self.assertIn("Allow: GET, PUT, DELETE, OPTIONS", blob)
-        self.assertIn("interesting methods: PUT, DELETE", blob)
+        self.assertIn("GET, PUT, DELETE, OPTIONS", blob)
+        self.assertNotIn("status=200", blob)
+        self.assertNotIn("interesting methods", blob)
+        self.assertNotIn("Access-Control-Allow-Origin", blob)
+        self.assertNotIn("Server: nginx", blob)
+        self.assertNotIn("Allow:", blob)
 
-    def test_options_405_with_allow_is_not_one_liner(self):
+    def test_options_405_still_prints_advertised_verbs(self):
         details: list[str] = []
         with patch("web_recon.report.info"):
             with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
@@ -103,11 +111,11 @@ class Phase1PrintTests(unittest.TestCase):
                     include_banner=False,
                 )
         blob = "\n".join(details)
-        self.assertIn("status=405", blob)
-        self.assertIn("Allow: GET, HEAD, OPTIONS", blob)
-        self.assertNotIn("HTTP 405  http://box.web/", blob)
+        self.assertIn("GET, HEAD, OPTIONS", blob)
+        self.assertNotIn("status=405", blob)
+        self.assertNotIn("HTTP 405", blob)
 
-    def test_options_404_is_one_line(self):
+    def test_options_without_allow_says_none_advertised(self):
         details: list[str] = []
         with patch("web_recon.report.info"):
             with patch("web_recon.report.detail", side_effect=lambda m: details.append(m)):
@@ -137,8 +145,8 @@ class Phase1PrintTests(unittest.TestCase):
                     include_banner=False,
                 )
         blob = "\n".join(details)
-        self.assertIn("HTTP 404  http://box.web/", blob)
-        self.assertTrue(any(d.strip() == "HTTP 404  http://box.web/" for d in details))
+        self.assertIn("(none advertised)", blob)
+        self.assertTrue(any(d.strip() == "(none advertised)" for d in details))
         self.assertNotIn("DOCTYPE", blob)
         self.assertNotIn("interesting methods", blob)
 
@@ -210,7 +218,7 @@ class SummaryErrorTests(unittest.TestCase):
         self.assertIn("HTTP 404  http://box.web/robots.txt", md)
         self.assertIn("HTTP 404  http://box.web/sitemap.xml", md)
         self.assertIn("HTTP OPTIONS (start URL)", md)
-        self.assertIn("HTTP 404  http://box.web/", md)
+        self.assertIn("_None advertised._", md)
         self.assertNotIn("DOCTYPE", md)
         self.assertNotIn("Disallow", md)
         self.assertNotIn("### Raw", md)
