@@ -10,11 +10,11 @@ from web_recon.classify import classify_all, count_classes
 from web_recon.crawler import PassiveCrawler, php_files_from_pages
 from web_recon.fingerprint import _wappalyzer, refresh_fingerprint, wappalyzer_error
 from web_recon.models import Config, Fingerprint, ReconResult
-from web_recon.report import print_overview, print_phase1, print_phase3, write_all
+from web_recon.report import print_discovery, print_overview, print_phase1, print_phase3, write_all
 from web_recon.runlog import RunLog
 from web_recon.scope import origin_of, target_slug
 from web_recon.term import info, warn
-from web_recon.url_tree import LiveUrlTree, format_url_tree
+from web_recon.url_tree import LiveUrlTree, format_page_tree
 from web_recon.util import detect_attacker_ip, ensure_dir, scan_output_dir
 
 
@@ -65,11 +65,11 @@ def _ingest_cached_errors(runlog: RunLog, result: ReconResult) -> None:
         runlog.error(line)
 
 
-def _print_phase2_tree(host: str, urls: list[str], *, from_cache: bool) -> None:
+def _print_phase2_tree(host: str, pages, *, from_cache: bool) -> None:
     extra = " {byellow}[from cache]{rst}" if from_cache else ""
     info("{bblue}Phase 2 {green}(rendered-DOM crawl){rst}" + extra)
     info("{bright}[{yellow}" + host + "{crst}/{bgreen}crawl{crst}]{rst}")
-    print(format_url_tree(urls, host))
+    print(format_page_tree(pages, host))
 
 
 def _phase1_headers(pages) -> list:
@@ -137,8 +137,8 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
                 from_cache=True,
             )
             print()
-            urls = [p.final_url or p.url for p in cached.pages]
-            _print_phase2_tree(cached.target or scope_host, urls, from_cache=True)
+            _print_phase2_tree(cached.target or scope_host, cached.pages, from_cache=True)
+            print_discovery(cached)
             _emit(cached, config, from_cache=True)
             return cached
         existing = load_inventory(inventory_path(out_dir))
@@ -184,7 +184,7 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
         for line in tree.start_lines():
             print(line)
         for rec in pages:
-            for line in tree.add(rec.final_url or rec.url):
+            for line in tree.add_fields(rec):
                 print(line)
 
     def progress(i: int, total: int, url: str) -> None:
@@ -194,7 +194,13 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
         for line in tree.add(url):
             print(line)
 
-    pages = await crawler.crawl([start], progress=progress, on_phase1=on_phase1)
+    def on_page(rec) -> None:
+        if tree is None:
+            return
+        for line in tree.add_fields(rec):
+            print(line)
+
+    pages = await crawler.crawl([start], progress=progress, on_phase1=on_phase1, on_page=on_page)
     origin = crawler.origin or origin
     print()
     info("Scope hosts: {byellow}" + (", ".join(sorted(crawler.scope_hosts)) or scope_host) + "{rst}")
@@ -235,5 +241,6 @@ async def _run(config: Config, start: str, parsed, origin: str, slug: str, out_d
     )
     write_all(result, verbose=config.verbose)
     runlog.write_errors()
+    print_discovery(result)
     _emit(result, config, from_cache=False)
     return result

@@ -11,9 +11,7 @@ Python 3.10+. After install, Chromium is still required (`playwright` does not b
 ### Python Wheel from Github
 
 ```bash
-pip install --break-system-packages --upgrade playwright
-python3 -m playwright install chromium
-python3 -m playwright install-deps chromium
+pip3 install --break-system-packages --upgrade playwright && python3 -m playwright install chromium && python3 -m playwright install-deps chromium
 pipx ensurepath
 pipx install git+https://github.com/brandonwhitmire/web_recon.git
 ```

@@ -84,6 +84,30 @@ def _normalize_ip(ip: str) -> str:
     return str(addr)
 
 
+def resolve_host_ip(host: str | None) -> str | None:
+    """Target address for pastables. IP literals are returned as-is; names are resolved."""
+    if not host:
+        return None
+    core = host.split("%", 1)[0]
+    try:
+        return str(ipaddress.ip_address(core))
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(core, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return None
+    for info in infos:
+        ip = _normalize_ip(info[4][0])
+        try:
+            addr = ipaddress.ip_address(ip)
+        except ValueError:
+            continue
+        if not addr.is_unspecified:
+            return str(addr)
+    return None
+
+
 def _usable_attacker_ip(ip: str) -> bool:
     if not ip:
         return False

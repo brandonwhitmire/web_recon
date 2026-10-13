@@ -9,8 +9,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from web_recon.classify import CLASS_PRIORITY, _priority
+from web_recon.discovery import discovery_sections
 from web_recon.models import Fingerprint, Header, OptionsInfo, ReconResult, RobotsInfo, SitemapInfo, Surface
 from web_recon.term import detail, info
+from web_recon.url_tree import format_page_tree
 
 SECURITY_HEADERS = [
     "Content-Security-Policy",
@@ -386,6 +388,12 @@ def render_crawl_map(result: ReconResult) -> str:
     lines.append(f"- Input surfaces: **{len(result.surfaces)}**")
     lines.append("- Crawl: same host only, rendered DOM, GET navigation. Subdomains off. No dirbust.")
     lines.append("")
+    lines.append("## Page tree")
+    lines.append("")
+    lines.append("Pages after DOM parse. Inputs hang off the page they were found on.")
+    lines.append("")
+    lines.append(fence(format_page_tree(result.pages, result.target or result.origin or "/")))
+    lines.append("")
     lines.append("## Discovered URLs")
     lines.append("")
     seen_urls: list[str] = []
@@ -624,6 +632,15 @@ def render_manual_checks(result: ReconResult) -> str:
     lines.append("Verbose variants **not** shown in the default classified report.")
     lines.append("Operator-run only. This tool never executes these commands.")
     lines.append("")
+    lines.append("## Discovery pastables")
+    lines.append("")
+    lines.append("Filled for this target. Not executed.")
+    lines.append("")
+    for title, body in discovery_sections(result):
+        lines.append(f"### {title}")
+        lines.append("")
+        lines.append(fence(body))
+        lines.append("")
     any_verbose = False
     for s in result.surfaces:
         blocks = [(cls, s.verbose.get(cls) or []) for cls in s.classes]
@@ -678,6 +695,89 @@ def render_inventory(result: ReconResult) -> str:
     return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
 
+def print_discovery(result: ReconResult) -> None:
+    """vHost, crawl, directory brute-force, and WordPress pastables. Never executed."""
+    sections = discovery_sections(result)
+    if not sections:
+        return
+    print()
+    info("{bblue}Discovery pastables{rst} {green}(operator-run; not executed){rst}")
+    for title, body in sections:
+        print()
+        info("{bmagenta}" + title + "{rst}")
+        print()
+        print(body)
+        print()
+
+
+def _category_why(whys: list[str]) -> str:
+    """One line for a group. Identical reasons stay; a shared prefix covers the rest."""
+    uniq: list[str] = []
+    for why in whys:
+        text = (why or "").strip()
+        if text and text not in uniq:
+            uniq.append(text)
+    if not uniq:
+        return ""
+    if len(uniq) == 1:
+        return uniq[0]
+    prefix = _common_prefix(uniq).rstrip(" \t—-–:")
+    if len(prefix) >= 12:
+        return prefix
+    return uniq[0]
+
+
+def _common_prefix(items: list[str]) -> str:
+    if not items:
+        return ""
+    prefix = items[0]
+    for item in items[1:]:
+        limit = min(len(prefix), len(item))
+        i = 0
+        while i < limit and prefix[i] == item[i]:
+            i += 1
+        prefix = prefix[:i]
+        if not prefix:
+            break
+    return prefix
+
+
+def _priority_line(priority: str, why: str) -> str:
+    label = "{byellow}" + priority + "{rst}"
+    text = (why or "").strip()
+    head = priority + ":"
+    if text.upper().startswith(head):
+        rest = text[len(head):].lstrip()
+        return label + (": " + rest if rest else "")
+    if text:
+        return label + ": " + text
+    return label
+
+
+def _pastable_groups(surfaces: list[Surface], cls: str) -> list[dict]:
+    """Surfaces that share a class and the same pastable text, in input order."""
+    order: list[tuple] = []
+    buckets: dict[tuple, dict] = {}
+    for surface in surfaces:
+        cmds = list(surface.canonical.get(cls) or [])
+        key = (surface.sqli_priority, surface.sqli_role, tuple(cmds))
+        bucket = buckets.get(key)
+        if bucket is None:
+            bucket = {"surfaces": [], "commands": cmds, "whys": []}
+            buckets[key] = bucket
+            order.append(key)
+        bucket["surfaces"].append(surface)
+        why = (surface.why.get(cls) or "").strip()
+        if why and why not in bucket["whys"]:
+            bucket["whys"].append(why)
+    groups = []
+    for key in order:
+        bucket = buckets[key]
+        bucket["why"] = _category_why(bucket["whys"])
+        groups.append(bucket)
+    return groups
+
+
 def print_phase3(
     result: ReconResult,
     class_filters: list[str] | None = None,
@@ -717,20 +817,8 @@ def print_phase3(
         if not shown:
             continue
         info("{bmagenta}" + cls + "{rst}: {byellow}" + str(len(shown)) + "{rst}")
-        if cls == "sqli":
-            for label in ("HIGH", "MEDIUM"):
-                group = [s for s in shown if s.sqli_priority == label]
-                if not group:
-                    continue
-                info("{byellow}" + label + "{rst} (" + str(len(group)) + ")")
-                for s in group:
-                    _print_surface_hit(s, cls, verbose)
-            leftover = [s for s in shown if s.sqli_priority not in {"HIGH", "MEDIUM"}]
-            for s in leftover:
-                _print_surface_hit(s, cls, verbose)
-        else:
-            for s in shown:
-                _print_surface_hit(s, cls, verbose)
+        for bucket in _pastable_groups(shown, cls):
+            _print_pastable_group(bucket, cls, verbose)
     if omitted:
         info(
             "{byellow}"
@@ -740,7 +828,53 @@ def print_phase3(
     print()
 
 
-def _print_surface_hit(s: Surface, cls: str, verbose: bool) -> None:
+def _verbose_blocks(surfaces: list[Surface], cls: str) -> tuple[list[str], list[tuple[list[str], list[Surface]]]]:
+    """Shared verbose commands, or per-param blocks when the filled text differs."""
+    grouped: dict[tuple[str, ...], list[Surface]] = {}
+    order: list[tuple[str, ...]] = []
+    for surface in surfaces:
+        extra = tuple(surface.verbose.get(cls) or [])
+        if extra not in grouped:
+            grouped[extra] = []
+            order.append(extra)
+        grouped[extra].append(surface)
+    if len(order) <= 1:
+        shared = list(order[0]) if order else []
+        return shared, []
+    blocks = [(list(extra), grouped[extra]) for extra in order if extra]
+    return [], blocks
+
+
+def _print_pastable_group(bucket: dict, cls: str, verbose: bool) -> None:
+    surfaces: list[Surface] = bucket["surfaces"]
+    why = bucket.get("why") or ""
+    cmds: list[str] = list(bucket.get("commands") or [])
+    side: list[tuple[list[str], list[Surface]]] = []
+    if verbose:
+        shared, side = _verbose_blocks(surfaces, cls)
+        cmds.extend(shared)
+    priority = surfaces[0].sqli_priority if cls == "sqli" else ""
+    if priority:
+        info("  " + _priority_line(priority, why))
+    elif why:
+        info("  " + why)
+    for surface in surfaces:
+        _print_surface_line(surface, cls)
+    if cmds:
+        print()
+        print("\n".join(cmds))
+        print()
+    elif not side:
+        info("  (no pastable template)")
+    for extra, owners in side:
+        params = ", ".join(s.param for s in owners)
+        info("  verbose  " + params)
+        print()
+        print("\n".join(extra))
+        print()
+
+
+def _print_surface_line(s: Surface, cls: str) -> None:
     display = _display_path(s)
     extra = ""
     if cls == "sqli" and s.sqli_priority:
@@ -757,17 +891,6 @@ def _print_surface_hit(s: Surface, cls: str, verbose: bool) -> None:
         + extra
         + "{rst}"
     )
-    if s.why.get(cls):
-        info("  " + s.why[cls])
-    cmds = list(s.canonical.get(cls) or [])
-    if verbose:
-        cmds.extend(s.verbose.get(cls) or [])
-    if cmds:
-        print()
-        print("\n".join(cmds))
-        print()
-    else:
-        info("  (no pastable template)")
 
 
 def print_overview(result: ReconResult, class_filters: list[str] | None = None, from_cache: bool = False) -> None:

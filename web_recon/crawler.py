@@ -306,6 +306,7 @@ class PassiveCrawler:
         seed_urls: list[str],
         progress=None,
         on_phase1=None,
+        on_page=None,
     ) -> list[PageRecord]:
         cfg = self.config
         pages: list[PageRecord] = []
@@ -391,6 +392,8 @@ class PassiveCrawler:
                         progress(len(pages) + 1, cfg.max_pages, url)
                     rec = await self.visit(context, url, depth)
                     pages.append(rec)
+                    if on_page:
+                        on_page(rec)
                     if rec.error and "out of scope" in (rec.error or ""):
                         continue
                     for link in rec.links:

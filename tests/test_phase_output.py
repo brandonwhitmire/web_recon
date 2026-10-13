@@ -392,6 +392,79 @@ class Phase3ClassifyTests(unittest.TestCase):
         self.assertIn("`(unnamed_textarea)`", md)
         self.assertIn("`name`", md)
 
+    def test_same_pastable_prints_once_per_category(self):
+        payloads = ["${{7*7}}", "{{7*'7'}}", "#{7*7}", "<%= 7*7 %>"]
+        why = "free-text input reflected in a rendered/formatted response (context is_free_text)"
+        self.result.surfaces = [
+            _surf(
+                id=name,
+                param=name,
+                method="POST",
+                page_path="contact.aspx",
+                page_url="http://box.web/contact.aspx",
+                classes=["ssti"],
+                why={"ssti": why},
+                canonical={"ssti": list(payloads)},
+            )
+            for name in ("message", "name", "subject")
+        ]
+        log: list[str] = []
+        with patch("web_recon.report.info", side_effect=lambda m: log.append(m)):
+            with patch("builtins.print", side_effect=lambda *a, **k: log.append(" ".join(str(x) for x in a))):
+                print_phase3(self.result, verbose=False)
+        blob = "\n".join(log)
+        self.assertEqual(blob.count("param={bgreen}message{rst}"), 1)
+        self.assertEqual(blob.count("param={bgreen}name{rst}"), 1)
+        self.assertEqual(blob.count("param={bgreen}subject{rst}"), 1)
+        self.assertEqual(blob.count(why), 1)
+        self.assertEqual(blob.count("${{7*7}}"), 1)
+        self.assertEqual(blob.count("{{7*'7'}}"), 1)
+        self.assertLess(blob.index(why), blob.index("param={bgreen}message{rst}"))
+        self.assertLess(blob.index("param={bgreen}subject{rst}"), blob.index("${{7*7}}"))
+
+    def test_sqli_login_fields_share_one_pastable(self):
+        user_why = "HIGH: login form (password field present) — username is the primary auth-query sink"
+        pass_why = "HIGH: login form (password field present) — password feeds the auth query"
+        probes = ["'", '"', "admin' -- -"]
+        self.result.surfaces = [
+            _surf(
+                id="user",
+                param="ctl00$ContentPlaceHolder1$UsernameTextBox",
+                method="POST",
+                page_path="login.aspx",
+                classes=["sqli"],
+                sqli_priority="HIGH",
+                sqli_role="login",
+                why={"sqli": user_why},
+                canonical={"sqli": list(probes)},
+            ),
+            _surf(
+                id="pw",
+                param="ctl00$ContentPlaceHolder1$PasswordTextBox",
+                method="POST",
+                page_path="login.aspx",
+                classes=["sqli"],
+                sqli_priority="HIGH",
+                sqli_role="login",
+                why={"sqli": pass_why},
+                canonical={"sqli": list(probes)},
+            ),
+        ]
+        log: list[str] = []
+        with patch("web_recon.report.info", side_effect=lambda m: log.append(m)):
+            with patch("builtins.print", side_effect=lambda *a, **k: log.append(" ".join(str(x) for x in a))):
+                print_phase3(self.result, class_filters=["sqli"], verbose=False)
+        blob = "\n".join(log)
+        self.assertIn("Filter: {bmagenta}sqli{rst}", blob)
+        self.assertEqual(blob.count("UsernameTextBox"), 1)
+        self.assertEqual(blob.count("PasswordTextBox"), 1)
+        self.assertEqual(blob.count("{byellow}HIGH{rst}"), 1)
+        self.assertIn("login form (password field present)", blob)
+        self.assertNotIn("username is the primary", blob)
+        self.assertNotIn("password feeds the auth query", blob)
+        self.assertEqual(blob.count("admin' -- -"), 1)
+        self.assertLess(blob.index("PasswordTextBox"), blob.index("admin' -- -"))
+
 
 if __name__ == "__main__":
     unittest.main()

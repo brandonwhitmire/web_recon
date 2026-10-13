@@ -1,13 +1,22 @@
-"""ASCII URL trees (tree(1)-style) for Phase 2 crawl output."""
+"""ASCII URL trees (tree(1)-style) for Phase 2 crawl output.
+
+Field groups hang off the page URL they were parsed from, so the diagram shows
+where each input sits in the crawled DOM.
+"""
 
 from __future__ import annotations
 
 from urllib.parse import urlparse
 
+from web_recon.models import FormRecord, PageRecord
+
 MID = "├── "
 END = "└── "
 PIPE = "│   "
 PAD = "    "
+
+# Buttons are not attack inputs; everything else (including hidden) is shown.
+_SKIP_FIELD_TYPES = {"submit", "button", "reset", "image"}
 
 
 def url_segments(url: str) -> list[str]:
@@ -23,32 +32,108 @@ def url_segments(url: str) -> list[str]:
     return parts
 
 
+class _Node:
+    def __init__(self) -> None:
+        self.children: dict[str, _Node] = {}
+        self.groups: list[tuple[str, list[str]]] = []
+
+
+def _field_line(name: str, field_type: str) -> str:
+    label = (name or "").strip() or "(unnamed)"
+    kind = (field_type or "text").strip() or "text"
+    return f"{label}  {kind}"
+
+
+def _keep_field(field_type: str) -> bool:
+    return (field_type or "").strip().lower() not in _SKIP_FIELD_TYPES
+
+
+def _form_label(form: FormRecord) -> str:
+    method = (form.method or "GET").upper()
+    path = urlparse(form.action or "").path or "/"
+    if not path.startswith("/"):
+        path = "/" + path
+    label = f"{method} {path}"
+    if form.has_file_input:
+        label += "  multipart"
+    return label
+
+
+def field_groups(page: PageRecord) -> list[tuple[str, list[str]]]:
+    """(group label, field lines) for inputs parsed from this page."""
+    groups: list[tuple[str, list[str]]] = []
+    query = [_field_line(name, "query") for name, _value in (page.query_params or []) if (name or "").strip()]
+    if query:
+        groups.append(("query", query))
+    for form in page.forms or []:
+        lines = [
+            _field_line(field.name, field.field_type)
+            for field in form.fields
+            if _keep_field(field.field_type)
+        ]
+        if lines:
+            groups.append((_form_label(form), lines))
+    loose = [
+        _field_line(field.name, field.field_type)
+        for field in (page.loose_fields or [])
+        if _keep_field(field.field_type)
+    ]
+    if loose:
+        groups.append(("loose", loose))
+    return groups
+
+
 def format_url_tree(urls: list[str], root: str) -> str:
     """Full nested tree with correct └── on last siblings. Insertion order."""
-    children: dict[str, dict] = {}
+    return format_page_tree([_url_only(u) for u in urls], root)
+
+
+def format_page_tree(pages: list[PageRecord], root: str) -> str:
+    """URL tree plus the inputs parsed from each page."""
+    root_node = _Node()
     seen: set[str] = set()
-    for url in urls:
-        key = url.strip()
-        if not key or key in seen:
+    for page in pages:
+        url = (page.final_url or page.url or "").strip()
+        if not url:
             continue
-        seen.add(key)
-        node = children
-        for seg in url_segments(key):
-            node = node.setdefault(seg, {})
+        node = root_node
+        for seg in url_segments(url):
+            node = node.children.setdefault(seg, _Node())
+        groups = field_groups(page)
+        if url not in seen:
+            seen.add(url)
+        node.groups.extend(groups)
     lines = [root]
-    lines.extend(_render_children(children, prefix=""))
+    lines.extend(_render_node(root_node, ""))
     return "\n".join(lines)
 
 
-def _render_children(children: dict[str, dict], prefix: str) -> list[str]:
-    items = list(children.items())
+def _url_only(url: str) -> PageRecord:
+    return PageRecord(url=url, final_url=url, status=None)
+
+
+def _render_node(node: _Node, prefix: str) -> list[str]:
+    url_items = list(node.children.items())
+    groups = [(title, fields) for title, fields in node.groups if fields]
+    total = len(url_items) + len(groups)
     lines: list[str] = []
-    for i, (name, child) in enumerate(items):
-        last = i == len(items) - 1
+    idx = 0
+    for name, child in url_items:
+        idx += 1
+        last = idx == total
         branch = END if last else MID
         lines.append(prefix + branch + name)
         ext = PAD if last else PIPE
-        lines.extend(_render_children(child, prefix + ext))
+        lines.extend(_render_node(child, prefix + ext))
+    for title, fields in groups:
+        idx += 1
+        last = idx == total
+        branch = END if last else MID
+        lines.append(prefix + branch + title)
+        ext = PAD if last else PIPE
+        for j, field in enumerate(fields):
+            fb = END if j == len(fields) - 1 else MID
+            lines.append(prefix + ext + fb + field)
     return lines
 
 
@@ -84,3 +169,26 @@ class LiveUrlTree:
             depth = len(t)
             new.append((PIPE * (depth - 1)) + MID + seg)
         return new
+
+    def add_fields(self, page: PageRecord) -> list[str]:
+        """Ensure the page URL is in the tree, then print its parsed inputs."""
+        url = (page.final_url or page.url or "").strip()
+        lines = self.add(url) if url else []
+        if not url:
+            return lines
+        depth = len(url_segments(url))
+        segs = url_segments(url)
+        for i, (title, fields) in enumerate(field_groups(page)):
+            if not fields:
+                continue
+            gkey = tuple(segs + [f"@{i}:{title}"])
+            if gkey not in self._printed:
+                self._printed.add(gkey)
+                lines.append((PIPE * depth) + MID + title)
+            for field in fields:
+                fkey = gkey + (field,)
+                if fkey in self._printed:
+                    continue
+                self._printed.add(fkey)
+                lines.append((PIPE * (depth + 1)) + MID + field)
+        return lines
